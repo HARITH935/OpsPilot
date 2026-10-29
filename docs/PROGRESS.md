@@ -9,13 +9,13 @@
 
 ## Phase 0 — Foundation
 - [ ] Install JDK 21, Maven, Python 3.11 + uv, Node 20, Docker Desktop, kind, kubectl, Helm, Git
-- [x] Create repo layout (Part A §6) with placeholder READMEs
+- [x] Create repo layout with placeholder READMEs
 - [x] `.gitignore`, `.editorconfig`, root README skeleton, `docs/PROGRESS.md`
 - [x] `git init`, first commit, push to GitHub — public repo HARITH935/OpsPilot; `CLAUDE.md` kept local (gitignored)
-- [ ] Branch protection on `main`
+- [x] Branch protection on `main` (PR required, applies to owner, no force-push/delete; CI check added in Phase 3)
 - [x] PR template
-- [ ] Conventional Commits adopted
-- **Acceptance:** [ ] all tool versions print · [ ] repo pushed · [x] `PROGRESS.md` lists all phases
+- [x] Conventional Commits adopted (enforced via PR template checklist)
+- **Acceptance:** [ ] all tool versions print · [x] repo pushed · [x] `PROGRESS.md` lists all phases
 
 ## Phase 1 — Core Microservices
 - [ ] 1. `order-service` skeleton: health endpoint, layered packages, Actuator
@@ -127,4 +127,5 @@
 ## Log
 | Date | Step | Notes |
 |---|---|---|
-| 2026-10-29 | Phase 0: repo layout, .gitignore, .editorconfig, README, PROGRESS | Tool check: see below |
+| 2026-10-29 | Phase 0: repo layout, .gitignore, .editorconfig, README, PROGRESS | Tool check: JDK 17 (need 21), Python 3.13 (need 3.11 via uv); Maven, uv, kind, Helm missing |
+| 2026-10-29 | Phase 0: pushed to GitHub (public), PR template, branch protection | Remaining: install JDK 21, Maven, uv, kind, Helm |
