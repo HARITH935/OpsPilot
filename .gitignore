@@ -1,0 +1,70 @@
+# ───────── Secrets (never commit) ─────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+kubeconfig*
+*.kubeconfig
+# Sealed Secrets: the *sealed* YAML is safe to commit; raw Secret manifests are not
+*-secret.raw.yaml
+
+# ───────── Java / Maven ─────────
+target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+*.war
+hs_err_pid*
+.mvn/timing.properties
+
+# ───────── Python / uv ─────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# ML artefacts (tracked in MLflow, not git)
+mlruns/
+mlartifacts/
+*.pt
+*.pth
+*.ckpt
+data/raw/
+
+# ───────── Node / Vite ─────────
+node_modules/
+dashboard/dist/
+*.tsbuildinfo
+npm-debug.log*
+.vite/
+
+# ───────── Helm ─────────
+deploy/helm/**/charts/*.tgz
+
+# ───────── IDE / OS ─────────
+.idea/
+*.iml
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+*.swp
+
+# ───────── Logs ─────────
+*.log
+logs/
+
+# ───────── Private notes ─────────
+# AI assistant instructions — kept local, not published
+CLAUDE.md
