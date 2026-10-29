@@ -13,7 +13,7 @@
 - [x] `.gitignore`, `.editorconfig`, root README skeleton, `docs/PROGRESS.md`
 - [x] `git init`, first commit, push to GitHub — public repo HARITH935/OpsPilot; `CLAUDE.md` kept local (gitignored)
 - [ ] Branch protection on `main`
-- [ ] PR template
+- [x] PR template
 - [ ] Conventional Commits adopted
 - **Acceptance:** [ ] all tool versions print · [ ] repo pushed · [x] `PROGRESS.md` lists all phases
 
