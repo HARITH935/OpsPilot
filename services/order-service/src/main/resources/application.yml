@@ -1,0 +1,16 @@
+spring:
+  application:
+    name: order-service
+
+server:
+  port: ${SERVER_PORT:8081}   # env var SERVER_PORT, default 8081
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus   # only these actuator endpoints are reachable over HTTP
+  endpoint:
+    health:
+      probes:
+        enabled: true   # adds /actuator/health/liveness and /readiness (used by Kubernetes probes)
