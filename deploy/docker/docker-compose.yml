@@ -1,0 +1,34 @@
+# Local development stack. Run from the repo root:
+#   docker compose -f deploy/docker/docker-compose.yml up -d
+# Secrets come from deploy/docker/.env (copy .env.example; never commit .env).
+name: opspilot
+
+services:
+  postgres:
+    image: postgres:16.15-alpine   # exact version pinned so every machine gets the same database
+    container_name: opspilot-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/docker/.env}
+      # Read by the init script to create one database + user per service
+      ORDERS_DB_PASSWORD: ${ORDERS_DB_PASSWORD:?set ORDERS_DB_PASSWORD in deploy/docker/.env}
+      INVENTORY_DB_PASSWORD: ${INVENTORY_DB_PASSWORD:?set INVENTORY_DB_PASSWORD in deploy/docker/.env}
+      PAYMENTS_DB_PASSWORD: ${PAYMENTS_DB_PASSWORD:?set PAYMENTS_DB_PASSWORD in deploy/docker/.env}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"   # host:container
+    volumes:
+      - pgdata:/var/lib/postgresql/data                               # data survives container restarts
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro                # scripts run once, on first start with an empty volume
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 512M   # keep the 8 GB dev machine responsive
+    restart: unless-stopped
+
+volumes:
+  pgdata:
