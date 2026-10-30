@@ -18,13 +18,18 @@
 - **Acceptance:** [x] all tool versions print · [x] repo pushed · [x] `PROGRESS.md` lists all phases
 
 ## Phase 1 — Core Microservices
-- [ ] 1. `order-service` skeleton: health endpoint, layered packages, Actuator
-- [ ] 2. PostgreSQL via Docker; Flyway `V1__init.sql`; JPA entities + repositories
-- [ ] 3. Order CRUD with DTOs, validation, `ProblemDetail` errors
-- [ ] 4. `inventory-service`: products + reservations; seed data migration
-- [ ] 5. `payment-service`: simulated provider with failure/latency env vars
-- [ ] 6. `common-events` Maven module for the event envelope
-- [ ] 7. Tests: unit, `@WebMvcTest`, Testcontainers repository tests
+> Spring Boot 4.1, one Maven parent (`services/pom.xml`), one Postgres with a database per service — [ADR 0003](adr/0003-phase1-foundations.md).
+> Every step ships with its own tests (unit, `@WebMvcTest`, Testcontainers) and is one PR.
+
+- [ ] 1.1 Maven parent + wrapper; `order-service` skeleton: Actuator health (liveness/readiness), layered packages
+- [ ] 1.2 PostgreSQL in Docker Compose: one container, databases `orders` / `inventory` / `payments` with own users; `.env.example`
+- [ ] 1.3 Order schema: Flyway `V1__init.sql` (orders, order_items, outbox, processed_events + indexes); JPA entities (`@Version`) + repositories; Testcontainers repository test
+- [ ] 1.4 Order API: `POST /api/orders` (202 + id, `Idempotency-Key`), `GET /api/orders/{id}`, `GET /api/orders?status=&page=`; DTO records, validation, `ProblemDetail` errors; unit + `@WebMvcTest`
+- [ ] 1.5 `inventory-service` products: skeleton, schema, seed-data migration, `GET /api/products`, `GET /api/products/{sku}`, `POST /api/products`
+- [ ] 1.6 `inventory-service` reservations: reserve / release with optimistic locking + retry; concurrency test (stock never negative)
+- [ ] 1.7 `payment-service`: schema, simulated provider (`PAYMENT_FAILURE_RATE`, `PAYMENT_LATENCY_MS`), read API; failure-rate test
+- [ ] 1.8 `common-events` module: event envelope record + event payload records; JSON round-trip tests
+- [ ] 1.9 Phase 1 wrap-up: `./mvnw verify` green, curl demo of all three services, README "run locally"
 - **Acceptance:** [ ] each service starts · [ ] CRUD works via curl · [ ] `./mvnw verify` green for all three
 
 ## Phase 2 — Resilient Distributed Architecture
@@ -138,3 +143,4 @@
 | 2026-10-29 | Phase 0: pushed to GitHub (public), PR template, branch protection | Remaining: install JDK 21, Maven, uv, kind, Helm |
 | 2026-10-30 | Plan: added GitHub OAuth, sliding-window rate limiting, Redis cache, GraphQL | See [ADR 0001](adr/0001-backend-extras.md) |
 | 2026-10-30 | Phase 0 complete: freed disk (14 → 58 GB), installed toolchain, Java 21 default, Docker limits checked (3.8 GB / 8 CPU, kept) | Helm 4 instead of 3 — [ADR 0002](adr/0002-helm-4.md) |
+| 2026-10-30 | Phase 1 planned: 9 sub-phases, tests in every step | Spring Boot 4.1, Maven parent, one Postgres — [ADR 0003](adr/0003-phase1-foundations.md) |
