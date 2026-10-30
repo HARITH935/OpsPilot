@@ -1,0 +1,5 @@
+# Shell scripts must keep Unix (LF) line endings or they fail to run on Linux/macOS (e.g. inside Docker)
+*.sh        text eol=lf
+mvnw        text eol=lf
+# Windows batch scripts need Windows (CRLF) line endings
+*.cmd       text eol=crlf
