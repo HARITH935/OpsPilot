@@ -24,7 +24,8 @@
 - [x] 1.1 Maven parent + wrapper; `order-service` skeleton: Actuator health (liveness/readiness), layered packages
 - [x] 1.2 PostgreSQL in Docker Compose: one container, databases `orders` / `inventory` / `payments` with own users; `.env.example`
 - [x] 1.3 Order schema: Flyway `V1__init.sql` (orders, order_items, outbox, processed_events + indexes); JPA entities (`@Version`) + repositories; Testcontainers repository test
-- [ ] 1.4 Order API: `POST /api/orders` (202 + id, `Idempotency-Key`), `GET /api/orders/{id}`, `GET /api/orders?status=&page=`; DTO records, validation, `ProblemDetail` errors; unit + `@WebMvcTest`
+- [x] 1.4a Order API part 1: `POST /api/orders` (202 + `Location`), `GET /api/orders/{id}`; DTO records, validation, RFC 9457 `ProblemDetail` errors; unit + `@WebMvcTest` + end-to-end test. Orders are priced by inventory in the saga — [ADR 0004](adr/0004-orders-priced-by-inventory.md)
+- [ ] 1.4b Order API part 2: `GET /api/orders?status=&page=&size=` (newest first); `Idempotency-Key` (replay → same order, different body → 422, race-safe via unique constraint; V2 migration)
 - [ ] 1.5 `inventory-service` products: skeleton, schema, seed-data migration, `GET /api/products`, `GET /api/products/{sku}`, `POST /api/products`
 - [ ] 1.6 `inventory-service` reservations: reserve / release with optimistic locking + retry; concurrency test (stock never negative)
 - [ ] 1.7 `payment-service`: schema, simulated provider (`PAYMENT_FAILURE_RATE`, `PAYMENT_LATENCY_MS`), read API; failure-rate test
@@ -147,3 +148,4 @@
 | 2026-10-30 | 1.1 order-service skeleton: Spring Boot 4.1.2, health/liveness/readiness/prometheus, 3 tests green | Starts in 1.0 s, 201 MB; port 8081 used by an Expo server, verified on 18081 |
 | 2026-10-30 | 1.2 Postgres 16.15 in Docker Compose: orders / inventory / payments DBs, one user each, CONNECT revoked from others | Verified: cross-DB access denied, wrong password denied, survives restart, 18 MB RAM |
 | 2026-10-30 | 1.3 order schema: Flyway V1 (4 tables, 3 indexes), Order/OrderItem entities with @Version, OrderRepository | 12 tests green (Testcontainers Postgres 16.15); Flyway applied V1 on local DB, skipped on restart |
+| 2026-10-30 | 1.4a Order API: create (202 + Location) and get; validation; ProblemDetail errors | 23 tests green; curl: 202 / 200 / 400 with field errors / 404 against local Postgres |

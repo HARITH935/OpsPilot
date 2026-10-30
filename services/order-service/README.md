@@ -19,7 +19,23 @@ cd services
 ```
 Needs Docker running: repository and health tests start their own throwaway Postgres (Testcontainers).
 
-## Endpoints
+## API
+| Method + path | Success | Errors |
+|---|---|---|
+| `POST /api/orders` | **202** `{orderId, status}` + `Location: /api/orders/{id}` | 400 invalid body |
+| `GET /api/orders/{id}` | **200** order with its items | 400 not a UUID · 404 unknown order |
+
+```bash
+curl -i -X POST localhost:8081/api/orders -H 'Content-Type: application/json' \
+     -d '{"customerId":"c-1","items":[{"sku":"SKU-1","qty":2}]}'
+curl localhost:8081/api/orders/<orderId>
+```
+- **202 Accepted**, not 201: the order is stored, but stock and payment are processed afterwards (saga, Phase 2).
+- `totalAmount` / `unitPrice` are `null` until inventory prices the order during the saga ([ADR 0004](../../docs/adr/0004-orders-priced-by-inventory.md)).
+- Errors use **RFC 9457 Problem Details** (`application/problem+json`). Validation errors list each bad field:
+  `{"title":"Bad Request","status":400,"errors":{"items[0].qty":"must be greater than 0"}}`
+
+## Operational endpoints
 | Path | Purpose |
 |---|---|
 | `GET /actuator/health` | Overall health |
