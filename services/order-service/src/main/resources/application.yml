@@ -1,6 +1,14 @@
 spring:
   application:
     name: order-service
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/orders}
+    username: ${DB_USERNAME:orders_user}
+    password: ${DB_PASSWORD}   # no default on purpose: the app must be given the password
+  jpa:
+    open-in-view: false        # don't keep DB connections open while writing the HTTP response
+    hibernate:
+      ddl-auto: validate       # Flyway owns the schema; Hibernate only checks entities match it
 
 server:
   port: ${SERVER_PORT:8081}   # env var SERVER_PORT, default 8081

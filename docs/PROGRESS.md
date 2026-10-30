@@ -23,7 +23,7 @@
 
 - [x] 1.1 Maven parent + wrapper; `order-service` skeleton: Actuator health (liveness/readiness), layered packages
 - [x] 1.2 PostgreSQL in Docker Compose: one container, databases `orders` / `inventory` / `payments` with own users; `.env.example`
-- [ ] 1.3 Order schema: Flyway `V1__init.sql` (orders, order_items, outbox, processed_events + indexes); JPA entities (`@Version`) + repositories; Testcontainers repository test
+- [x] 1.3 Order schema: Flyway `V1__init.sql` (orders, order_items, outbox, processed_events + indexes); JPA entities (`@Version`) + repositories; Testcontainers repository test
 - [ ] 1.4 Order API: `POST /api/orders` (202 + id, `Idempotency-Key`), `GET /api/orders/{id}`, `GET /api/orders?status=&page=`; DTO records, validation, `ProblemDetail` errors; unit + `@WebMvcTest`
 - [ ] 1.5 `inventory-service` products: skeleton, schema, seed-data migration, `GET /api/products`, `GET /api/products/{sku}`, `POST /api/products`
 - [ ] 1.6 `inventory-service` reservations: reserve / release with optimistic locking + retry; concurrency test (stock never negative)
@@ -146,3 +146,4 @@
 | 2026-10-30 | Phase 1 planned: 9 sub-phases, tests in every step | Spring Boot 4.1, Maven parent, one Postgres — [ADR 0003](adr/0003-phase1-foundations.md) |
 | 2026-10-30 | 1.1 order-service skeleton: Spring Boot 4.1.2, health/liveness/readiness/prometheus, 3 tests green | Starts in 1.0 s, 201 MB; port 8081 used by an Expo server, verified on 18081 |
 | 2026-10-30 | 1.2 Postgres 16.15 in Docker Compose: orders / inventory / payments DBs, one user each, CONNECT revoked from others | Verified: cross-DB access denied, wrong password denied, survives restart, 18 MB RAM |
+| 2026-10-30 | 1.3 order schema: Flyway V1 (4 tables, 3 indexes), Order/OrderItem entities with @Version, OrderRepository | 12 tests green (Testcontainers Postgres 16.15); Flyway applied V1 on local DB, skipped on restart |
