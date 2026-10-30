@@ -28,14 +28,15 @@
 - **Acceptance:** [ ] each service starts · [ ] CRUD works via curl · [ ] `./mvnw verify` green for all three
 
 ## Phase 2 — Resilient Distributed Architecture
-- [ ] 1. Kafka (KRaft) in Docker; topics from Part B §B2.2
+- [ ] 1. Kafka (KRaft) in Docker; create the domain + OpsPilot topics
 - [ ] 2. Transactional outbox + publisher in each service; idempotent consumers
 - [ ] 3. Order saga (choreography) incl. compensations and saga-timeout job
-- [ ] 4. API gateway: routing, JWT auth (RS256, roles), Redis rate limiting
-- [ ] 5. Redis cache-aside for product catalog
-- [ ] 6. Resilience4j: timeouts, retries, circuit breakers, bulkhead
-- [ ] 7. Integration tests for happy path, out-of-stock, payment failure
-- **Acceptance:** [ ] payment failure → order CANCELLED + stock restored · [ ] duplicate events processed once · [ ] rate limit returns 429 · [ ] circuit opens under induced failures
+- [ ] 4. API gateway: routing, JWT auth (RS256, roles, demo users), JWKS endpoint; Redis in Docker
+- [ ] 5. Sliding-window rate limiter (Redis + Lua): per-user / per-IP, 429 + `Retry-After` + `X-RateLimit-*`, Prometheus counter, fail-open
+- [ ] 6. Redis cache-aside for product catalog
+- [ ] 7. Resilience4j: timeouts, retries, circuit breakers, bulkhead
+- [ ] 8. Integration tests for happy path, out-of-stock, payment failure, rate limiter
+- **Acceptance:** [ ] payment failure → order CANCELLED + stock restored · [ ] duplicate events processed once · [ ] Locust test shows 429s with `Retry-After` past the limit · [ ] circuit opens under induced failures
 
 ## Phase 3 — Containerization & CI
 - [ ] 1. Multi-stage, non-root Dockerfiles (layered JARs); multi-arch builds
@@ -45,7 +46,7 @@
 
 ## Phase 4 — Kubernetes Platform
 - [ ] 1. kind cluster (3 nodes); namespaces
-- [ ] 2. Operators: CloudNativePG, Strimzi, Sealed Secrets
+- [ ] 2. Operators: CloudNativePG, Strimzi, Sealed Secrets; Redis Helm chart (StatefulSet), password from a Kubernetes Secret
 - [ ] 3. Helm chart per service (Deployment, Service, ConfigMap, probes, resources, HPA, PDB, NetworkPolicy); umbrella chart
 - [ ] 4. Ingress-NGINX routing to gateway and dashboard placeholder
 - [ ] 5. Load test to watch HPA scale
@@ -63,8 +64,8 @@
 ## Phase 6 — Full Observability
 - [ ] 1. OTel Java agent + Collector; Prometheus (kube-prometheus-stack), Loki, Jaeger, Grafana
 - [ ] 2. Custom business metrics: saga completion, outbox backlog, consumer lag
-- [ ] 3. Grafana dashboards as code; Alertmanager SLO rules
-- **Acceptance:** [ ] one order traceable end-to-end in Jaeger · [ ] logs searchable by `trace_id` · [ ] SLO dashboard live
+- [ ] 3. Grafana dashboards as code (incl. rate-limiting panel); Alertmanager SLO rules
+- **Acceptance:** [ ] one order traceable end-to-end in Jaeger · [ ] logs searchable by `trace_id` · [ ] SLO dashboard live · [ ] rate-limited requests visible in Grafana
 
 ## Phase 7 — Chaos Engineering
 - [ ] 1. Install Chaos Mesh; toxiproxy for dependency faults
@@ -103,16 +104,22 @@
 - **Acceptance:** [ ] repeat incidents diagnosed measurably faster · [ ] runbook citations appear in evidence
 
 ## Phase 12 — Command Center Dashboard
-- [ ] 1. React + Vite + Tailwind scaffold; JWT login; role-based UI
-- [ ] 2. Overview: live service map (React Flow) + SLO cards
-- [ ] 3. Incident detail: streamed reasoning, evidence, hypotheses, blast-radius graph, Approve/Reject
-- [ ] 4. Chaos Lab with rate-limited "Break it yourself"
-- [ ] 5. Evals page; Architecture page; deployed via Helm + Argo CD
-- **Acceptance:** [ ] visitor triggers scenario and watches detection → diagnosis live · [ ] admin approves fix from UI
+*Backend first:*
+- [ ] 1. GitHub OAuth login in the gateway: JWT cookie, admin allowlist (`ADMIN_GITHUB_LOGINS`), client secret as Sealed Secret
+- [ ] 2. Incident history GraphQL API (Strawberry on FastAPI): cursor pagination, DataLoader, depth/alias limits
+- [ ] 3. Control-plane Redis cache: TTL per query type, invalidation on incident updates, hit/miss metrics + Grafana hit-ratio panel
+
+*Then the UI:*
+- [ ] 4. React + Vite + Tailwind scaffold; "Login with GitHub"; role-based UI
+- [ ] 5. Overview: live service map (React Flow) + SLO cards
+- [ ] 6. Incident detail: streamed reasoning, evidence, hypotheses, blast-radius graph, Approve/Reject
+- [ ] 7. Chaos Lab with login-required, rate-limited "Break it yourself"
+- [ ] 8. Evals page; Architecture page; deployed via Helm + Argo CD
+- **Acceptance:** [ ] visitor triggers scenario and watches detection → diagnosis live · [ ] admin approves fix from UI · [ ] non-admin GitHub user refused on approve (403) · [ ] repeated GraphQL queries measurably faster with cache · [ ] incident update visible in GraphQL within 1 s
 
 ## Phase 13 — Evaluation & Benchmarking
 - [ ] 1. `evals/run_all.py`: every scenario × 5 runs on the live cluster
-- [ ] 2. Metrics from Part B §B7; ML vs static-rule comparison; memory ablation
+- [ ] 2. Metrics (RCA accuracy, time to detect/diagnose, MTTR, anomaly precision/recall, cost); ML vs static-rule comparison; memory ablation
 - [ ] 3. Auto-generate `evals/RESULTS.md` + dashboard page
 - **Acceptance:** [ ] results table published · [ ] headline numbers meet or are honestly reported against targets
 
@@ -129,3 +136,4 @@
 |---|---|---|
 | 2026-10-29 | Phase 0: repo layout, .gitignore, .editorconfig, README, PROGRESS | Tool check: JDK 17 (need 21), Python 3.13 (need 3.11 via uv); Maven, uv, kind, Helm missing |
 | 2026-10-29 | Phase 0: pushed to GitHub (public), PR template, branch protection | Remaining: install JDK 21, Maven, uv, kind, Helm |
+| 2026-10-30 | Plan: added GitHub OAuth, sliding-window rate limiting, Redis cache, GraphQL | See [ADR 0001](adr/0001-backend-extras.md) |
