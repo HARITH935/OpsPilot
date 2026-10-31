@@ -1,9 +1,12 @@
 package com.opspilot.order.controller;
 
-import com.opspilot.order.dto.CreateOrderResponse;
 import com.opspilot.order.dto.OrderResponse;
+import com.opspilot.order.dto.OrderSummaryResponse;
+import com.opspilot.order.dto.PageResponse;
+import com.opspilot.order.exception.IdempotencyKeyReusedException;
 import com.opspilot.order.exception.OrderNotFoundException;
 import com.opspilot.order.model.OrderStatus;
+import com.opspilot.order.service.CreateOrderResult;
 import com.opspilot.order.service.OrderService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,6 +20,8 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -30,6 +35,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(OrderController.class)
 class OrderControllerTest {
 
+    private static final String VALID_BODY = """
+            {"customerId": "c-1", "items": [{"sku": "SKU-1", "qty": 2}]}
+            """;
+
     @Autowired
     private MockMvc mockMvc;
 
@@ -39,17 +48,48 @@ class OrderControllerTest {
     @Test
     void createOrderReturns202WithLocationAndOrderId() throws Exception {
         UUID id = UUID.randomUUID();
-        when(orderService.createOrder(any())).thenReturn(new CreateOrderResponse(id, OrderStatus.PENDING));
+        when(orderService.createOrder(any(), any())).thenReturn(new CreateOrderResult(id, OrderStatus.PENDING, false));
 
-        mockMvc.perform(post("/api/orders")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"customerId": "c-1", "items": [{"sku": "SKU-1", "qty": 2}]}
-                                """))
+        mockMvc.perform(post("/api/orders").contentType(MediaType.APPLICATION_JSON).content(VALID_BODY))
                 .andExpect(status().isAccepted())
                 .andExpect(header().string("Location", "/api/orders/" + id))
+                .andExpect(header().doesNotExist("Idempotent-Replayed"))
                 .andExpect(jsonPath("$.orderId").value(id.toString()))
                 .andExpect(jsonPath("$.status").value("PENDING"));
+    }
+
+    @Test
+    void replayedOrderIsMarkedWithAHeader() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(orderService.createOrder(any(), eq("key-1"))).thenReturn(new CreateOrderResult(id, OrderStatus.PENDING, true));
+
+        mockMvc.perform(post("/api/orders").header("Idempotency-Key", "key-1")
+                        .contentType(MediaType.APPLICATION_JSON).content(VALID_BODY))
+                .andExpect(status().isAccepted())
+                .andExpect(header().string("Idempotent-Replayed", "true"))
+                .andExpect(jsonPath("$.orderId").value(id.toString()));
+    }
+
+    @Test
+    void tooLongIdempotencyKeyIsRejected() throws Exception {
+        mockMvc.perform(post("/api/orders").header("Idempotency-Key", "x".repeat(101))
+                        .contentType(MediaType.APPLICATION_JSON).content(VALID_BODY))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.errors['Idempotency-Key']").value("size must be between 1 and 100"));
+
+        verifyNoInteractions(orderService);
+    }
+
+    @Test
+    void reusedKeyWithADifferentBodyReturns422Problem() throws Exception {
+        when(orderService.createOrder(any(), eq("key-1"))).thenThrow(new IdempotencyKeyReusedException("key-1"));
+
+        mockMvc.perform(post("/api/orders").header("Idempotency-Key", "key-1")
+                        .contentType(MediaType.APPLICATION_JSON).content(VALID_BODY))
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.title").value("Idempotency-Key reused"));
     }
 
     @Test
@@ -119,6 +159,49 @@ class OrderControllerTest {
     @Test
     void nonUuidOrderIdReturns400Problem() throws Exception {
         mockMvc.perform(get("/api/orders/not-a-uuid"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON));
+    }
+
+    @Test
+    void listOrdersReturnsAPage() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(orderService.listOrders(OrderStatus.PENDING, 1, 5)).thenReturn(new PageResponse<>(
+                List.of(new OrderSummaryResponse(id, "c-1", OrderStatus.PENDING, null, Instant.parse("2026-10-30T10:00:00Z"))),
+                1, 5, 6, 2));
+
+        mockMvc.perform(get("/api/orders").param("status", "PENDING").param("page", "1").param("size", "5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].id").value(id.toString()))
+                .andExpect(jsonPath("$.page").value(1))
+                .andExpect(jsonPath("$.size").value(5))
+                .andExpect(jsonPath("$.totalElements").value(6))
+                .andExpect(jsonPath("$.totalPages").value(2));
+    }
+
+    @Test
+    void listOrdersUsesSensibleDefaults() throws Exception {
+        when(orderService.listOrders(null, 0, 20)).thenReturn(new PageResponse<>(List.of(), 0, 20, 0, 0));
+
+        mockMvc.perform(get("/api/orders"))
+                .andExpect(status().isOk());
+
+        verify(orderService).listOrders(null, 0, 20);   // no status filter, first page, 20 per page
+    }
+
+    @Test
+    void listOrdersRejectsATooLargePageSize() throws Exception {
+        mockMvc.perform(get("/api/orders").param("size", "500"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.errors.size").value("must be less than or equal to 100"));
+
+        verifyNoInteractions(orderService);
+    }
+
+    @Test
+    void listOrdersRejectsAnUnknownStatus() throws Exception {
+        mockMvc.perform(get("/api/orders").param("status", "SHIPPED"))
                 .andExpect(status().isBadRequest())
                 .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON));
     }
