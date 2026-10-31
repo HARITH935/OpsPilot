@@ -3,6 +3,7 @@ package com.opspilot.order.repository;
 import com.opspilot.order.TestcontainersConfiguration;
 import com.opspilot.order.model.Order;
 import com.opspilot.order.model.OrderStatus;
+import jakarta.persistence.PersistenceException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
@@ -32,7 +33,7 @@ class OrderRepositoryTest {
 
     @Test
     void savesOrderWithItemsAndReadsItBack() {
-        Order order = new Order("customer-1", "key-1");
+        Order order = new Order("customer-1", "key-1", "fingerprint-1");
         order.addItem("SKU-1", 2);
         order.addItem("SKU-2", 1);
         orderRepository.saveAndFlush(order);
@@ -44,6 +45,7 @@ class OrderRepositoryTest {
         assertThat(loaded.getStatus()).isEqualTo(OrderStatus.PENDING);
         assertThat(loaded.getVersion()).isZero();
         assertThat(loaded.getCreatedAt()).isNotNull();
+        assertThat(loaded.getRequestFingerprint()).isEqualTo("fingerprint-1");
         assertThat(loaded.getItems())
                 .extracting("sku", "qty")
                 .containsExactlyInAnyOrder(tuple("SKU-1", 2), tuple("SKU-2", 1));
@@ -52,9 +54,9 @@ class OrderRepositoryTest {
     @Test
     void findsOrdersByStatusOnePageAtATime() {
         for (int i = 0; i < 3; i++) {
-            orderRepository.save(new Order("customer-" + i, null));
+            orderRepository.save(new Order("customer-" + i));
         }
-        Order cancelled = new Order("customer-x", null);
+        Order cancelled = new Order("customer-x");
         cancelled.cancel("OUT_OF_STOCK");
         orderRepository.save(cancelled);
         orderRepository.flush();
@@ -68,16 +70,37 @@ class OrderRepositoryTest {
     }
 
     @Test
-    void duplicateIdempotencyKeyIsRejected() {
-        orderRepository.saveAndFlush(new Order("customer-1", "same-key"));
+    void findsOrderByIdempotencyKey() {
+        Order order = orderRepository.saveAndFlush(new Order("customer-1", "key-42", "fingerprint-42"));
 
-        assertThatThrownBy(() -> orderRepository.saveAndFlush(new Order("customer-2", "same-key")))
+        assertThat(orderRepository.findByIdempotencyKey("key-42")).map(Order::getId).contains(order.getId());
+        assertThat(orderRepository.findByIdempotencyKey("unknown")).isEmpty();
+    }
+
+    @Test
+    void duplicateIdempotencyKeyIsRejected() {
+        orderRepository.saveAndFlush(new Order("customer-1", "same-key", "fingerprint-1"));
+
+        assertThatThrownBy(() -> orderRepository.saveAndFlush(new Order("customer-2", "same-key", "fingerprint-2")))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
+    void databaseRefusesAKeyWithoutFingerprint() {
+        // Even SQL written by hand (bypassing the Java checks) cannot break the rule: the CHECK constraint refuses it
+        assertThatThrownBy(() -> entityManager.getEntityManager()
+                .createNativeQuery("""
+                        INSERT INTO orders (id, customer_id, status, idempotency_key, version, created_at, updated_at)
+                        VALUES (gen_random_uuid(), 'c-1', 'PENDING', 'key-without-fingerprint', 0, now(), now())
+                        """)
+                .executeUpdate())
+                .isInstanceOf(PersistenceException.class)
+                .hasMessageContaining("orders_idempotency_key_needs_fingerprint");
+    }
+
+    @Test
     void staleUpdateIsRejectedByOptimisticLocking() {
-        Order order = orderRepository.saveAndFlush(new Order("customer-1", null));   // version 0
+        Order order = orderRepository.saveAndFlush(new Order("customer-1"));   // version 0
 
         // Simulate another request that updated the same order first (version 0 → 1)
         entityManager.getEntityManager()

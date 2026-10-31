@@ -10,7 +10,7 @@ class OrderTest {
 
     @Test
     void newOrderIsPending() {
-        Order order = new Order("customer-1", null);
+        Order order = new Order("customer-1");
 
         assertThat(order.getId()).isNotNull();
         assertThat(order.getStatus()).isEqualTo(OrderStatus.PENDING);
@@ -18,7 +18,7 @@ class OrderTest {
 
     @Test
     void pendingOrderCanBeConfirmed() {
-        Order order = new Order("customer-1", null);
+        Order order = new Order("customer-1");
 
         order.confirm();
 
@@ -27,7 +27,7 @@ class OrderTest {
 
     @Test
     void pendingOrderCanBeCancelledWithReason() {
-        Order order = new Order("customer-1", null);
+        Order order = new Order("customer-1");
 
         order.cancel("OUT_OF_STOCK");
 
@@ -37,7 +37,7 @@ class OrderTest {
 
     @Test
     void decidedOrderCannotChangeAgain() {
-        Order order = new Order("customer-1", null);
+        Order order = new Order("customer-1");
         order.confirm();
 
         assertThatThrownBy(() -> order.cancel("PAYMENT_FAILED"))
@@ -47,11 +47,19 @@ class OrderTest {
 
     @Test
     void itemsCanOnlyBeAddedThroughTheOrder() {
-        Order order = new Order("customer-1", null);
+        Order order = new Order("customer-1");
         order.addItem("SKU-1", 2);
 
         assertThat(order.getItems()).hasSize(1);
         assertThatThrownBy(() -> order.getItems().clear())
                 .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void idempotencyKeyAndFingerprintMustComeTogether() {
+        assertThatThrownBy(() -> new Order("customer-1", "key-1", null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new Order("customer-1", null, "fingerprint"))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

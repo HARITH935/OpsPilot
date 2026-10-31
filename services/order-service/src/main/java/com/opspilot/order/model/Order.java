@@ -36,6 +36,8 @@ public class Order {
 
     private String idempotencyKey;
 
+    private String requestFingerprint;
+
     @Version   // Hibernate adds "WHERE version = ?" to every UPDATE; a stale copy fails instead of overwriting
     private Long version;
 
@@ -51,10 +53,19 @@ public class Order {
         // required by JPA
     }
 
-    public Order(String customerId, String idempotencyKey) {
+    public Order(String customerId) {
+        this(customerId, null, null);
+    }
+
+    // The Idempotency-Key and the fingerprint of the request that used it always come as a pair (or both null)
+    public Order(String customerId, String idempotencyKey, String requestFingerprint) {
+        if ((idempotencyKey == null) != (requestFingerprint == null)) {
+            throw new IllegalArgumentException("idempotencyKey and requestFingerprint must be given together");
+        }
         this.id = UUID.randomUUID();
         this.customerId = customerId;
         this.idempotencyKey = idempotencyKey;
+        this.requestFingerprint = requestFingerprint;
         this.status = OrderStatus.PENDING;
     }
 
@@ -113,6 +124,10 @@ public class Order {
 
     public String getIdempotencyKey() {
         return idempotencyKey;
+    }
+
+    public String getRequestFingerprint() {
+        return requestFingerprint;
     }
 
     public Long getVersion() {
