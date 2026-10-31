@@ -9,6 +9,11 @@ spring:
     open-in-view: false        # don't keep DB connections open while writing the HTTP response
     hibernate:
       ddl-auto: validate       # Flyway owns the schema; Hibernate only checks entities match it
+    properties:
+      hibernate:
+        # Send UPDATEs sorted by primary key: every transaction locks products in the same (SKU) order,
+        # so two orders holding the same products can never wait on each other forever (a deadlock)
+        order_updates: true
 
 server:
   port: ${SERVER_PORT:8083}   # env var SERVER_PORT, default 8083

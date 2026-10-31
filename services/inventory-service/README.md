@@ -1,6 +1,7 @@
 # inventory-service (:8083)
 
-Product catalogue and stock. Next: stock reservations for the order saga (step 1.6) and a Redis cache for product reads (Phase 2).
+Product catalogue, stock, and stock reservations for the order saga. Next (Phase 2): Kafka events drive the
+reservations, and a Redis cache serves product reads.
 
 ## Run
 Needs the local Postgres from `deploy/docker` running (see its README).
@@ -43,6 +44,20 @@ A product: `{"sku":"SKU-1","name":"Mechanical Keyboard","price":89.99,"stock":50
 - Errors use **RFC 9457 Problem Details** (`application/problem+json`), the same format as order-service:
   `{"title":"Bad Request","status":400,"errors":{"price":"must be greater than 0"}}`
 
+## Stock reservations (no HTTP endpoint)
+`ReservationService` holds stock while an order is being paid. From Phase 2 the saga's Kafka events call it.
+
+| Method | Called on (Phase 2) | Effect |
+|---|---|---|
+| `reserve(orderId, items)` | `OrderCreated` | **All or nothing:** every item held (`reserved += qty`) → `Reserved` with unit prices + total (inventory prices orders, [ADR 0004](../../docs/adr/0004-orders-priced-by-inventory.md)) · or nothing held → `Rejected` (`UNKNOWN_PRODUCT` / `OUT_OF_STOCK`) |
+| `commit(orderId)` | `PaymentCompleted` | The held units leave the warehouse: `stock -= qty`, `reserved -= qty` |
+| `release(orderId)` | `PaymentFailed` (or the order is cancelled) | The held units are on sale again: `reserved -= qty` |
+
+- Each reservation row moves once: `HELD` → `COMMITTED` or `HELD` → `RELEASED`. Repeating `commit` / `release` changes nothing (returns 0); reserving the same order twice is refused.
+- **Two orders, same product, same moment:** the product's `version` column (optimistic locking) makes the slower update fail instead of overwriting the other. Spring Framework 7's built-in `@Retryable` then runs the method again with fresh data: up to 5 retries, about 10 → 160 ms apart with random jitter. `RetryConfig` logs every failed attempt.
+- **No deadlocks:** `hibernate.order_updates=true` sends UPDATEs sorted by SKU, so every transaction locks products in the same order.
+- Proven by `ReservationIntegrationTest`: 20 orders grab the last 5 units at the same moment → exactly 5 held, 15 rejected, stock never below 0.
+
 ## Operational endpoints
 | Path | Purpose |
 |---|---|
@@ -63,6 +78,7 @@ A product: `{"sku":"SKU-1","name":"Mechanical Keyboard","price":89.99,"stock":50
 Migrations in `src/main/resources/db/migration/`:
 - `V1__init.sql`: `products` with CHECK rules (price > 0, stock ≥ 0, 0 ≤ reserved ≤ stock), `outbox`, `processed_events`
 - `V2__seed_products.sql`: 10 demo products `SKU-1` … `SKU-10` (`SKU-10` has only 3 in stock, for out-of-stock demos)
+- `V3__create_reservations.sql`: `reservations` (status `HELD` / `COMMITTED` / `RELEASED`, one row per order + product, foreign key to `products`)
 
 Never edit a merged migration — add the next `V<n>__...sql`.
 

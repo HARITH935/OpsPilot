@@ -27,7 +27,7 @@
 - [x] 1.4a Order API part 1: `POST /api/orders` (202 + `Location`), `GET /api/orders/{id}`; DTO records, validation, RFC 9457 `ProblemDetail` errors; unit + `@WebMvcTest` + end-to-end test. Orders are priced by inventory in the saga — [ADR 0004](adr/0004-orders-priced-by-inventory.md)
 - [x] 1.4b Order API part 2: `GET /api/orders?status=&page=&size=` (newest first); `Idempotency-Key` (replay → same order, different body → 422, race-safe via unique constraint; V2 migration)
 - [x] 1.5 `inventory-service` products: skeleton, schema, seed-data migration, `GET /api/products`, `GET /api/products/{sku}`, `POST /api/products`
-- [ ] 1.6 `inventory-service` reservations: reserve / release with optimistic locking + retry; concurrency test (stock never negative)
+- [x] 1.6 `inventory-service` reservations: reserve / commit / release with optimistic locking + retry; concurrency test (stock never negative)
 - [ ] 1.7 `payment-service`: schema, simulated provider (`PAYMENT_FAILURE_RATE`, `PAYMENT_LATENCY_MS`), read API; failure-rate test
 - [ ] 1.8 `common-events` module: event envelope record + event payload records; JSON round-trip tests
 - [ ] 1.9 Phase 1 wrap-up: `./mvnw verify` green, curl demo of all three services, README "run locally"
@@ -151,3 +151,4 @@
 | 2026-10-30 | 1.4a Order API: create (202 + Location) and get; validation; ProblemDetail errors | 23 tests green; curl: 202 / 200 / 400 with field errors / 404 against local Postgres |
 | 2026-10-31 | 1.4b list orders (paged, newest first) + Idempotency-Key (replay, 422, race-safe), Flyway V2 | 47 tests green; race test: 8 concurrent requests → 1 insert, 7 caught by the unique constraint |
 | 2026-10-31 | 1.5 inventory-service products: Flyway V1 (products with CHECK rules, outbox, processed_events) + V2 seed (10 products); list (paged, by SKU), get, create (201; duplicate SKU → 409, race-safe) | 33 new tests (80 total) green; race test: 8 concurrent creates → 1 insert, 7 caught by the primary key; curl on local Postgres: 200 / 201 / 400 / 404 / 409 |
+| 2026-10-31 | 1.6 inventory reservations: Flyway V3; reserve (all or nothing, priced) / commit / release; optimistic locking + Spring 7 `@Retryable` (5 retries, backoff + jitter); UPDATEs sorted by SKU (no deadlocks) | 25 new tests (58 inventory, 105 total) green; concurrency test, 20 orders vs. the last 5 units → 5 held, 15 rejected, stock never negative; over 6 runs 21–31 conflicts retried per run, 0 exhausted, 0 deadlocks |
