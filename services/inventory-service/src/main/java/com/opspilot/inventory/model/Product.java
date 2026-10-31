@@ -20,7 +20,7 @@ public class Product {
 
     private int stock;      // units on hand in the warehouse
 
-    private int reserved;   // units held for orders that are not paid yet (step 1.6)
+    private int reserved;   // units held for orders that are not paid yet
 
     // Optimistic locking counter. A Long that is still null tells Spring Data "this product is new" → INSERT.
     // So saving a new product with an existing SKU fails on the primary key instead of overwriting that product.
@@ -47,6 +47,42 @@ public class Product {
     // What can still be ordered right now
     public int getAvailable() {
         return stock - reserved;
+    }
+
+    // Hold units for an order: they stay in the warehouse, but nobody else can buy them
+    public void reserve(int qty) {
+        requirePositive(qty);
+        if (qty > getAvailable()) {
+            throw new IllegalStateException(
+                    "Only " + getAvailable() + " of " + sku + " available, " + qty + " requested");
+        }
+        reserved += qty;
+    }
+
+    // The order was not paid: its held units can be sold again
+    public void release(int qty) {
+        requireReserved(qty);
+        reserved -= qty;
+    }
+
+    // The order was paid: its held units leave the warehouse
+    public void commit(int qty) {
+        requireReserved(qty);
+        reserved -= qty;
+        stock -= qty;
+    }
+
+    private void requireReserved(int qty) {
+        requirePositive(qty);
+        if (qty > reserved) {
+            throw new IllegalStateException("Only " + reserved + " of " + sku + " reserved, " + qty + " requested");
+        }
+    }
+
+    private static void requirePositive(int qty) {
+        if (qty <= 0) {
+            throw new IllegalArgumentException("qty must be greater than 0");
+        }
     }
 
     public String getSku() {

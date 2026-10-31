@@ -33,4 +33,72 @@ class ProductTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("stock");
     }
+
+    @Test
+    void reservingHoldsUnitsSoFewerAreAvailable() {
+        Product product = productWithStock(5);
+
+        product.reserve(2);
+
+        assertThat(product.getStock()).isEqualTo(5);   // still in the warehouse
+        assertThat(product.getReserved()).isEqualTo(2);
+        assertThat(product.getAvailable()).isEqualTo(3);
+    }
+
+    @Test
+    void cannotReserveMoreThanIsAvailable() {
+        Product product = productWithStock(5);
+        product.reserve(4);
+
+        assertThatThrownBy(() -> product.reserve(2))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Only 1 of SKU-X available");
+        assertThat(product.getReserved()).isEqualTo(4);   // unchanged
+    }
+
+    @Test
+    void releasingMakesHeldUnitsAvailableAgain() {
+        Product product = productWithStock(5);
+        product.reserve(3);
+
+        product.release(3);
+
+        assertThat(product.getReserved()).isZero();
+        assertThat(product.getAvailable()).isEqualTo(5);
+    }
+
+    @Test
+    void committingTakesHeldUnitsOutOfStock() {
+        Product product = productWithStock(5);
+        product.reserve(3);
+
+        product.commit(3);
+
+        assertThat(product.getStock()).isEqualTo(2);
+        assertThat(product.getReserved()).isZero();
+        assertThat(product.getAvailable()).isEqualTo(2);
+    }
+
+    @Test
+    void cannotReleaseOrCommitMoreThanIsHeld() {
+        Product product = productWithStock(5);
+        product.reserve(1);
+
+        assertThatThrownBy(() -> product.release(2)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> product.commit(2)).isInstanceOf(IllegalStateException.class);
+        assertThat(product.getStock()).isEqualTo(5);
+        assertThat(product.getReserved()).isEqualTo(1);
+    }
+
+    @Test
+    void quantityMustBeGreaterThanZero() {
+        Product product = productWithStock(5);
+
+        assertThatThrownBy(() -> product.reserve(0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> product.release(-1)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private static Product productWithStock(int stock) {
+        return new Product("SKU-X", "Test Product", new BigDecimal("9.99"), stock);
+    }
 }
