@@ -26,5 +26,6 @@
     <!-- Built together, in dependency order, by ./mvnw verify -->
     <modules>
         <module>order-service</module>
+        <module>inventory-service</module>
     </modules>
 </project>

@@ -1,0 +1,24 @@
+spring:
+  application:
+    name: inventory-service
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/inventory}
+    username: ${DB_USERNAME:inventory_user}
+    password: ${DB_PASSWORD}   # no default on purpose: the app must be given the password
+  jpa:
+    open-in-view: false        # don't keep DB connections open while writing the HTTP response
+    hibernate:
+      ddl-auto: validate       # Flyway owns the schema; Hibernate only checks entities match it
+
+server:
+  port: ${SERVER_PORT:8083}   # env var SERVER_PORT, default 8083
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus   # only these actuator endpoints are reachable over HTTP
+  endpoint:
+    health:
+      probes:
+        enabled: true   # adds /actuator/health/liveness and /readiness (used by Kubernetes probes)
