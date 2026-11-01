@@ -29,7 +29,7 @@
 - [x] 1.5 `inventory-service` products: skeleton, schema, seed-data migration, `GET /api/products`, `GET /api/products/{sku}`, `POST /api/products`
 - [x] 1.6 `inventory-service` reservations: reserve / commit / release with optimistic locking + retry; concurrency test (stock never negative)
 - [x] 1.7 `payment-service`: schema, simulated provider (`PAYMENT_FAILURE_RATE`, `PAYMENT_LATENCY_MS`), read API; failure-rate test
-- [ ] 1.8 `common-events` module: event envelope record + event payload records; JSON round-trip tests
+- [x] 1.8 `common-events` module: event envelope record + event payload records; JSON round-trip tests
 - [ ] 1.9 Phase 1 wrap-up: `./mvnw verify` green, curl demo of all three services, README "run locally"
 - **Acceptance:** [ ] each service starts · [ ] CRUD works via curl · [ ] `./mvnw verify` green for all three
 
@@ -153,3 +153,4 @@
 | 2026-10-31 | 1.5 inventory-service products: Flyway V1 (products with CHECK rules, outbox, processed_events) + V2 seed (10 products); list (paged, by SKU), get, create (201; duplicate SKU → 409, race-safe) | 33 new tests (80 total) green; race test: 8 concurrent creates → 1 insert, 7 caught by the primary key; curl on local Postgres: 200 / 201 / 400 / 404 / 409 |
 | 2026-10-31 | 1.6 inventory reservations: Flyway V3; reserve (all or nothing, priced) / commit / release; optimistic locking + Spring 7 `@Retryable` (5 retries, backoff + jitter); UPDATEs sorted by SKU (no deadlocks) | 25 new tests (58 inventory, 105 total) green; concurrency test, 20 orders vs. the last 5 units → 5 held, 15 rejected, stock never negative; over 6 runs 21–31 conflicts retried per run, 0 exhausted, 0 deadlocks |
 | 2026-11-01 | 1.7 payment-service: Flyway V1 (payments: one per order, a reason exactly when failed; outbox, processed_events); simulated provider (`PAYMENT_FAILURE_RATE` / `PAYMENT_LATENCY_MS`, validated at startup); charge (never twice, provider called outside transactions); read API (list newest first, get) | 41 new tests (146 total) green; failure-rate test: 10,000 charges at 30% → 2,924 failures; real run with rate 0.5 / 200 ms; `PAYMENT_FAILURE_RATE=2` → refused to start |
+| 2026-11-01 | 1.8 common-events: plain library with `EventEnvelope` (B2.1 fields; can't contradict its payload), 8 saga event records (sealed `EventPayload`), `EventType` catalog (JSON name ↔ record ↔ topic), `EventJson` (fixed format, tolerant reader) | 21 tests (167 total) green; JSON round trip for all 8 events; exact wire shape checked against B2.1; jar 20 KB, 17 classes, no Spring |

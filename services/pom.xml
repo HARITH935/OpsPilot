@@ -25,6 +25,7 @@
 
     <!-- Built together, in dependency order, by ./mvnw verify -->
     <modules>
+        <module>common-events</module>   <!-- first: the services will depend on it (Phase 2) -->
         <module>order-service</module>
         <module>inventory-service</module>
         <module>payment-service</module>
