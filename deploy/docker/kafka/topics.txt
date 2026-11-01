@@ -1,0 +1,16 @@
+# Every Kafka topic OpsPilot uses (CLAUDE.md Part B §B2.2), one per line; lines starting with # are ignored.
+# create-topics.sh creates them (3 partitions each); smoke-test.sh checks them.
+
+# Order saga events. The key is the order id, so all events of one order stay in order.
+orders.events
+inventory.events
+payments.events
+
+# Dead-letter topics: a message that still fails after 3 retries is parked here, so it cannot block the others
+orders.events.dlq
+inventory.events.dlq
+payments.events.dlq
+
+# Control plane (Phases 8-9): anomaly alerts for the agent, the agent's progress for the dashboard
+opspilot.incidents
+opspilot.timeline
