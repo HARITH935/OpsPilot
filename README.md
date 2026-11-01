@@ -23,7 +23,7 @@ _TODO: architecture diagram._
 _TODO (Phase 13): table from `evals/RESULTS.md`._
 
 ## Tech stack
-Java 21 · Spring Boot 3 · Kafka · PostgreSQL · Redis · Kubernetes · Helm · Argo CD · OpenTelemetry ·
+Java 21 · Spring Boot 4 · Kafka · PostgreSQL · Redis · Kubernetes · Helm · Argo CD · OpenTelemetry ·
 Prometheus · Grafana · PyTorch · LangGraph · FastAPI · React · TypeScript
 
 ## Repository layout
@@ -40,7 +40,38 @@ Prometheus · Grafana · PyTorch · LangGraph · FastAPI · React · TypeScript
 | `docs/` | Progress, ADRs, runbooks |
 
 ## Run locally
-_TODO (Phase 3): `docker compose up` instructions._
+Today (end of Phase 1): the three services and PostgreSQL on your machine. Each service works on its own; Phase 2
+connects them through Kafka (the order saga), and Phase 3 turns all of this into a single `docker compose up`.
+
+**You need:** JDK 21 and Docker Desktop (running).
+
+```bash
+# 1. The database: copy the template, fill in your own passwords, start Postgres
+cp -n deploy/docker/.env.example deploy/docker/.env   # -n: never overwrites a .env you already have
+docker compose -f deploy/docker/docker-compose.yml up -d
+
+# 2. Build and test everything (the tests start throwaway Postgres containers, so Docker must be running)
+cd services && ./mvnw verify && cd ..
+
+# 3. Start each service in its own terminal (run from the repo root)
+DB_PASSWORD=$(grep '^ORDERS_DB_PASSWORD=' deploy/docker/.env | cut -d= -f2) \
+  java -Xmx256m -jar services/order-service/target/order-service-0.0.1-SNAPSHOT.jar
+DB_PASSWORD=$(grep '^INVENTORY_DB_PASSWORD=' deploy/docker/.env | cut -d= -f2) \
+  java -Xmx256m -jar services/inventory-service/target/inventory-service-0.0.1-SNAPSHOT.jar
+DB_PASSWORD=$(grep '^PAYMENTS_DB_PASSWORD=' deploy/docker/.env | cut -d= -f2) \
+  java -Xmx256m -jar services/payment-service/target/payment-service-0.0.1-SNAPSHOT.jar
+```
+`-Xmx256m` keeps each service small (about 700 MB for all three). If a port is taken, add `SERVER_PORT=<free port>`
+in front, e.g. `SERVER_PORT=18081` for order-service.
+
+| Service | Port | Try it | Full API |
+|---|---|---|---|
+| order-service | 8081 | `curl -i -X POST localhost:8081/api/orders -H 'Content-Type: application/json' -d '{"customerId":"c-1","items":[{"sku":"SKU-1","qty":2}]}'` | [README](services/order-service/README.md) |
+| inventory-service | 8083 | `curl 'localhost:8083/api/products?size=3'` | [README](services/inventory-service/README.md) |
+| payment-service | 8082 | `curl localhost:8082/api/payments` | [README](services/payment-service/README.md) |
+
+Every service also has `/actuator/health` (plus `/liveness` and `/readiness`) and `/actuator/prometheus`.
+Until Phase 2, a new order stays `PENDING` without prices: nothing reserves its stock or charges it yet.
 
 ## Progress
 See [docs/PROGRESS.md](docs/PROGRESS.md).
