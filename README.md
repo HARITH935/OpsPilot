@@ -40,15 +40,17 @@ Prometheus · Grafana · PyTorch · LangGraph · FastAPI · React · TypeScript
 | `docs/` | Progress, ADRs, runbooks |
 
 ## Run locally
-Today (end of Phase 1): the three services and PostgreSQL on your machine. Each service works on its own; Phase 2
-connects them through Kafka (the order saga), and Phase 3 turns all of this into a single `docker compose up`.
+Today (Phase 2 in progress): PostgreSQL and Kafka in Docker, the three services on your machine. Each service still
+works on its own: Kafka is running, and Phase 2 connects the services through it step by step (the order saga).
+Phase 3 turns all of this into a single `docker compose up`.
 
 **You need:** JDK 21 and Docker Desktop (running).
 
 ```bash
-# 1. The database: copy the template, fill in your own passwords, start Postgres
+# 1. Postgres and Kafka: copy the template, fill in your own passwords, start both (Kafka's topics are created for you)
 cp -n deploy/docker/.env.example deploy/docker/.env   # -n: never overwrites a .env you already have
 docker compose -f deploy/docker/docker-compose.yml up -d
+deploy/docker/kafka/smoke-test.sh                     # optional: checks Kafka and its topics
 
 # 2. Build and test everything (the tests start throwaway Postgres containers, so Docker must be running)
 cd services && ./mvnw verify && cd ..
@@ -71,7 +73,8 @@ in front, e.g. `SERVER_PORT=18081` for order-service.
 | payment-service | 8082 | `curl localhost:8082/api/payments` | [README](services/payment-service/README.md) |
 
 Every service also has `/actuator/health` (plus `/liveness` and `/readiness`) and `/actuator/prometheus`.
-Until Phase 2, a new order stays `PENDING` without prices: nothing reserves its stock or charges it yet.
+Until the saga is connected (Phase 2, steps 2.2–2.5), a new order stays `PENDING` without prices: nothing reserves its
+stock or charges it yet.
 
 ## Progress
 See [docs/PROGRESS.md](docs/PROGRESS.md).

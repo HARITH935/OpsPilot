@@ -37,7 +37,7 @@
 > Spring Cloud Gateway MVC, a shared `common-messaging` module, a polling outbox, open reads + admin-only writes — [ADR 0005](adr/0005-phase2-foundations.md).
 > Every step ships with its own tests and is one PR.
 
-- [ ] 2.1 Kafka (KRaft, one broker) in Docker Compose; topics created on startup: `orders` / `inventory` / `payments` `.events` + `.dlq`, `opspilot.incidents`, `opspilot.timeline` (3 partitions each)
+- [x] 2.1 Kafka (KRaft, one broker) in Docker Compose; topics created on startup: `orders` / `inventory` / `payments` `.events` + `.dlq`, `opspilot.incidents`, `opspilot.timeline` (3 partitions each)
 - [ ] 2.2 `common-messaging` module: transactional outbox writer + polling publisher (key = order id, at-least-once); order-service publishes `OrderCreated`; Testcontainers Kafka
 - [ ] 2.3 Idempotent consumers (`processed_events`) + dead-letter topics after 3 retries; inventory reserves stock on `OrderCreated` → `StockReserved` / `StockRejected`
 - [ ] 2.4 Payment charges on `StockReserved` → `PaymentCompleted` / `PaymentFailed`; order copies the prices from `StockReserved` and cancels on `StockRejected`
@@ -163,3 +163,4 @@
 | 2026-11-01 | 1.8 common-events: plain library with `EventEnvelope` (B2.1 fields; can't contradict its payload), 8 saga event records (sealed `EventPayload`), `EventType` catalog (JSON name ↔ record ↔ topic), `EventJson` (fixed format, tolerant reader) | 21 tests (167 total) green; JSON round trip for all 8 events; exact wire shape checked against B2.1; jar 20 KB, 17 classes, no Spring |
 | 2026-11-01 | 1.9 Phase 1 wrap-up — **Phase 1 complete**: `./mvnw verify` on main; all three services running together on local Postgres; curl demo; root README "Run locally" | 167 tests green (36 s); all three ready in ~4 s, 705 MB together; demo: catalogue 200, new product 201 / duplicate 409, order 202 + retry replayed (same order), payments 200 (empty until the Phase 2 saga) |
 | 2026-11-01 | Phase 2 planned: 12 sub-steps, tests in every step | Gateway MVC, `common-messaging`, polling outbox, open reads + admin-only writes — [ADR 0005](adr/0005-phase2-foundations.md) |
+| 2026-11-01 | 2.1 Kafka in Docker Compose: `apache/kafka:4.2.2` (KRaft, one node, heap 512 MB, localhost only, auto-create off); one-shot `kafka-init` creates the 8 topics from `kafka/topics.txt`; `kafka/smoke-test.sh` | healthy in ~3 s, topics created in ~10 s; smoke test passed (8 topics × 3 partitions, same key → same partition in order, misspelled topic refused) and fails on a missing topic / wrong partition count / stopped Kafka; topics survive container re-creation (same topic id); ~320 MB RAM |

@@ -30,5 +30,69 @@ services:
           memory: 512M   # keep the 8 GB dev machine responsive
     restart: unless-stopped
 
+  kafka:
+    image: apache/kafka:4.2.2   # official image; same version as the Kafka client inside Spring Boot 4.1.2
+    container_name: opspilot-kafka
+    environment:
+      # KRaft mode: this one node is both the broker (stores messages) and the controller (manages the cluster)
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093   # the controllers that vote on cluster changes: just this node
+      CLUSTER_ID: 52iq3sKeSrGL7zeTA99S5g                 # from kafka-storage.sh random-uuid; an id, not a secret
+      # Listeners (name://host:port): apps on this machine, other containers, the controller
+      KAFKA_LISTENERS: HOST://:9092,DOCKER://:19092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: HOST://localhost:9092,DOCKER://kafka:19092   # the address each client is told to use
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: HOST:PLAINTEXT,DOCKER:PLAINTEXT,CONTROLLER:PLAINTEXT   # no TLS, no login
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: DOCKER
+      # One broker, so Kafka's own internal topics keep one copy
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"   # topics come only from kafka/topics.txt; a misspelled one fails loudly
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0  # dev: a new consumer starts at once (the default waits 3 s for others)
+      KAFKA_LOG_DIRS: /var/lib/kafka/data        # where messages are stored ("log" = Kafka's message files)
+      KAFKA_HEAP_OPTS: -Xmx512m                  # Java heap cap; Kafka's default is 1 GB
+    ports:
+      - "127.0.0.1:9092:9092"   # only this machine can connect: there is no password
+    volumes:
+      - kafkadata:/var/lib/kafka/data   # topics and messages survive restarts
+    # The image declares these folders as volumes. They are unused here, so keep them in memory;
+    # otherwise every new container leaves unnamed volumes behind.
+    tmpfs:
+      - /etc/kafka/secrets
+      - /mnt/shared/config
+    healthcheck:
+      # Healthy once the broker answers a real Kafka request (an open port alone is not enough)
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      start_period: 60s
+      start_interval: 2s   # check often while Kafka starts...
+      interval: 30s        # ...then rarely: every check starts a small Java program
+      timeout: 15s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1G   # the 512 MB heap + Java's own memory outside the heap
+    restart: unless-stopped
+
+  # One-shot job: creates the topics once Kafka is healthy, then exits (shows as "exited (0)" = success)
+  kafka-init:
+    image: apache/kafka:4.2.2   # same image, used only for its command-line tools
+    container_name: opspilot-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy   # start only after Kafka's health check passes
+    entrypoint: ["/bin/bash", "/scripts/create-topics.sh"]
+    volumes:
+      - ./kafka:/scripts:ro   # topics.txt + create-topics.sh
+    tmpfs:   # same reason as in kafka above
+      - /var/lib/kafka/data
+      - /etc/kafka/secrets
+      - /mnt/shared/config
+
 volumes:
   pgdata:
+  kafkadata:
