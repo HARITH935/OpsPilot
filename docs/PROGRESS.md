@@ -34,14 +34,21 @@
 - **Acceptance:** [x] each service starts · [x] CRUD works via curl · [x] `./mvnw verify` green for all three
 
 ## Phase 2 — Resilient Distributed Architecture
-- [ ] 1. Kafka (KRaft) in Docker; create the domain + OpsPilot topics
-- [ ] 2. Transactional outbox + publisher in each service; idempotent consumers
-- [ ] 3. Order saga (choreography) incl. compensations and saga-timeout job
-- [ ] 4. API gateway: routing, JWT auth (RS256, roles, demo users), JWKS endpoint; Redis in Docker
-- [ ] 5. Sliding-window rate limiter (Redis + Lua): per-user / per-IP, 429 + `Retry-After` + `X-RateLimit-*`, Prometheus counter, fail-open
-- [ ] 6. Redis cache-aside for product catalog
-- [ ] 7. Resilience4j: timeouts, retries, circuit breakers, bulkhead
-- [ ] 8. Integration tests for happy path, out-of-stock, payment failure, rate limiter
+> Spring Cloud Gateway MVC, a shared `common-messaging` module, a polling outbox, open reads + admin-only writes — [ADR 0005](adr/0005-phase2-foundations.md).
+> Every step ships with its own tests and is one PR.
+
+- [ ] 2.1 Kafka (KRaft, one broker) in Docker Compose; topics created on startup: `orders` / `inventory` / `payments` `.events` + `.dlq`, `opspilot.incidents`, `opspilot.timeline` (3 partitions each)
+- [ ] 2.2 `common-messaging` module: transactional outbox writer + polling publisher (key = order id, at-least-once); order-service publishes `OrderCreated`; Testcontainers Kafka
+- [ ] 2.3 Idempotent consumers (`processed_events`) + dead-letter topics after 3 retries; inventory reserves stock on `OrderCreated` → `StockReserved` / `StockRejected`
+- [ ] 2.4 Payment charges on `StockReserved` → `PaymentCompleted` / `PaymentFailed`; order copies the prices from `StockReserved` and cancels on `StockRejected`
+- [ ] 2.5 Order confirms / cancels on the payment result (`OrderConfirmed` / `OrderCancelled`); inventory commits / releases (`StockReleased`) — compensation complete
+- [ ] 2.6 Saga timeout job: orders still `PENDING` after 30 s are cancelled; a payment that arrives after that is handled
+- [ ] 2.7 `api-gateway` (:8080, Spring Cloud Gateway MVC): routes to the three services, timeout per route
+- [ ] 2.8 JWT (RS256): `POST /auth/token` (demo users viewer / engineer / admin, `DEMO_USERS_ENABLED`), `/.well-known/jwks.json`, roles (`POST /api/products` = ADMIN)
+- [ ] 2.9 Redis in Docker + sliding-window rate limiter (one Lua script): per user / per IP, 429 + `Retry-After` + `X-RateLimit-*`, `gateway_ratelimit_*` metrics, fail-open; Locust test
+- [ ] 2.10 Redis cache-aside for `GET /api/products/{sku}` (TTL 60 s, evicted when stock changes, fail-open, hit/miss metrics)
+- [ ] 2.11 Resilience4j: timeouts, retries with backoff + jitter, circuit breakers (gateway routes, payment provider), bulkhead
+- [ ] 2.12 Phase 2 wrap-up: cross-service tests (happy path, out of stock, payment failure, rate limiter), demo, README
 - **Acceptance:** [ ] payment failure → order CANCELLED + stock restored · [ ] duplicate events processed once · [ ] Locust test shows 429s with `Retry-After` past the limit · [ ] circuit opens under induced failures
 
 ## Phase 3 — Containerization & CI
@@ -155,3 +162,4 @@
 | 2026-11-01 | 1.7 payment-service: Flyway V1 (payments: one per order, a reason exactly when failed; outbox, processed_events); simulated provider (`PAYMENT_FAILURE_RATE` / `PAYMENT_LATENCY_MS`, validated at startup); charge (never twice, provider called outside transactions); read API (list newest first, get) | 41 new tests (146 total) green; failure-rate test: 10,000 charges at 30% → 2,924 failures; real run with rate 0.5 / 200 ms; `PAYMENT_FAILURE_RATE=2` → refused to start |
 | 2026-11-01 | 1.8 common-events: plain library with `EventEnvelope` (B2.1 fields; can't contradict its payload), 8 saga event records (sealed `EventPayload`), `EventType` catalog (JSON name ↔ record ↔ topic), `EventJson` (fixed format, tolerant reader) | 21 tests (167 total) green; JSON round trip for all 8 events; exact wire shape checked against B2.1; jar 20 KB, 17 classes, no Spring |
 | 2026-11-01 | 1.9 Phase 1 wrap-up — **Phase 1 complete**: `./mvnw verify` on main; all three services running together on local Postgres; curl demo; root README "Run locally" | 167 tests green (36 s); all three ready in ~4 s, 705 MB together; demo: catalogue 200, new product 201 / duplicate 409, order 202 + retry replayed (same order), payments 200 (empty until the Phase 2 saga) |
+| 2026-11-01 | Phase 2 planned: 12 sub-steps, tests in every step | Gateway MVC, `common-messaging`, polling outbox, open reads + admin-only writes — [ADR 0005](adr/0005-phase2-foundations.md) |
