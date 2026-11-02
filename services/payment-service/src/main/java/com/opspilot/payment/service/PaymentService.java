@@ -1,5 +1,10 @@
 package com.opspilot.payment.service;
 
+import com.opspilot.events.EventPayload;
+import com.opspilot.events.PaymentCompleted;
+import com.opspilot.events.PaymentFailed;
+import com.opspilot.messaging.consumer.ProcessedEvents;
+import com.opspilot.messaging.outbox.OutboxWriter;
 import com.opspilot.payment.dto.PageResponse;
 import com.opspilot.payment.dto.PaymentResponse;
 import com.opspilot.payment.exception.PaymentNotFoundException;
@@ -15,6 +20,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.math.BigDecimal;
 import java.util.Optional;
@@ -29,47 +35,75 @@ public class PaymentService {
 
     private final PaymentRepository paymentRepository;
     private final PaymentProvider paymentProvider;
+    private final ProcessedEvents processedEvents;
+    private final OutboxWriter outbox;
+    private final TransactionOperations transactions;
 
-    public PaymentService(PaymentRepository paymentRepository, PaymentProvider paymentProvider) {
+    public PaymentService(PaymentRepository paymentRepository, PaymentProvider paymentProvider,
+                          ProcessedEvents processedEvents, OutboxWriter outbox, TransactionOperations transactions) {
         this.paymentRepository = paymentRepository;
         this.paymentProvider = paymentProvider;
+        this.processedEvents = processedEvents;
+        this.outbox = outbox;
+        this.transactions = transactions;
     }
 
     /**
-     * Charges an order once. If the order already has a payment, that one is returned and the provider is not called
-     * again. Called by the order saga (StockReserved event) from Phase 2.
+     * Charges an order once, for the StockReserved event {@code eventId}. If the order already has a payment (the same
+     * event delivered again), that one is returned and the provider is not called again. Otherwise the payment, the
+     * event's duplicate mark and the answer (PaymentCompleted / PaymentFailed, via the outbox) are saved in one
+     * transaction.
      *
      * <p>Deliberately not @Transactional: the provider call can be slow (PAYMENT_LATENCY_MS). Holding a transaction,
      * and with it a database connection, while waiting would let a slow provider use up the connection pool.
      */
-    public PaymentResponse charge(UUID orderId, BigDecimal amount) {
+    public PaymentResponse charge(UUID eventId, UUID orderId, BigDecimal amount) {
         Optional<Payment> existing = paymentRepository.findByOrderId(orderId);
         if (existing.isPresent()) {
             log.info("Order {} already has a {} payment; not charging again", orderId, existing.get().getStatus());
             return PaymentResponse.from(existing.get());
         }
 
-        Payment payment;
+        Payment payment = callProvider(orderId, amount);   // outside any transaction
         try {
-            paymentProvider.charge(orderId, amount);
-            payment = Payment.completed(orderId, amount);
-        } catch (PaymentProviderException e) {
-            log.warn("Payment for order {} failed: {}", orderId, e.getMessage());
-            payment = Payment.failed(orderId, amount, PROVIDER_ERROR);
-        }
-
-        try {
-            paymentRepository.saveAndFlush(payment);   // runs in its own short transaction (Spring Data's default)
+            Boolean saved = transactions.execute(tx -> {   // short: only database work, the provider call is done
+                if (!processedEvents.markProcessed(eventId)) {
+                    return false;   // another delivery of this event finished in the meantime
+                }
+                paymentRepository.saveAndFlush(payment);   // flush now: a second payment for the order fails here
+                outbox.write(answer(payment));             // the saga's next step: order and inventory react to it
+                return true;
+            });
+            if (!Boolean.TRUE.equals(saved)) {
+                log.info("Event {} for order {} was already handled, skipping the duplicate", eventId, orderId);
+                return paymentRepository.findByOrderId(orderId).map(PaymentResponse::from).orElseThrow();
+            }
         } catch (DataIntegrityViolationException e) {
             // Race: another charge for this order was stored first; the unique order_id let only one in.
-            // (Both reached the provider. A real provider would drop the repeat by the order id; with Kafka in
-            // Phase 2 one order's events are handled one at a time, so this doesn't happen.)
+            // (Both reached the provider. A real provider would drop the repeat by the order id; with Kafka one
+            // order's events are handled one at a time, so this only happens if a consumer hand-over overlaps.)
             log.info("Order {} was charged concurrently; returning the payment stored first", orderId);
             return paymentRepository.findByOrderId(orderId).map(PaymentResponse::from).orElseThrow(() -> e);
         }
 
         log.info("Payment {} for order {}: {} {}", payment.getId(), orderId, payment.getStatus(), amount);
         return PaymentResponse.from(payment);
+    }
+
+    private Payment callProvider(UUID orderId, BigDecimal amount) {
+        try {
+            paymentProvider.charge(orderId, amount);
+            return Payment.completed(orderId, amount);
+        } catch (PaymentProviderException e) {
+            log.warn("Payment for order {} failed: {}", orderId, e.getMessage());
+            return Payment.failed(orderId, amount, PROVIDER_ERROR);
+        }
+    }
+
+    private static EventPayload answer(Payment payment) {
+        return payment.getStatus() == PaymentStatus.COMPLETED
+                ? new PaymentCompleted(payment.getOrderId(), payment.getId(), payment.getAmount())
+                : new PaymentFailed(payment.getOrderId(), payment.getId(), payment.getAmount(), payment.getFailureReason());
     }
 
     @Transactional(readOnly = true)

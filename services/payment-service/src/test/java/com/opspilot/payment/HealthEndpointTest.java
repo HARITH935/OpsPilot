@@ -16,7 +16,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @AutoConfigureMetrics   // metrics export is off in tests by default; turn it on so /actuator/prometheus exists
-@Import(TestcontainersConfiguration.class)   // the full app needs a database
+@Import({TestcontainersConfiguration.class, KafkaTestcontainersConfiguration.class})   // the full app needs a database and Kafka
 class HealthEndpointTest {
 
     @Autowired

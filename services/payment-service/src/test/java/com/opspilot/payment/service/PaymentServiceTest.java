@@ -1,5 +1,9 @@
 package com.opspilot.payment.service;
 
+import com.opspilot.events.PaymentCompleted;
+import com.opspilot.events.PaymentFailed;
+import com.opspilot.messaging.consumer.ProcessedEvents;
+import com.opspilot.messaging.outbox.OutboxWriter;
 import com.opspilot.payment.dto.PageResponse;
 import com.opspilot.payment.dto.PaymentResponse;
 import com.opspilot.payment.exception.PaymentNotFoundException;
@@ -19,6 +23,7 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -30,17 +35,20 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-// Pure unit test: the repository and the provider are Mockito mocks, so there is no Spring and no database
+// Pure unit test: the repository, the provider, the duplicate check and the outbox are Mockito mocks:
+// no Spring, no database, no Kafka
 @ExtendWith(MockitoExtension.class)
 class PaymentServiceTest {
 
     private static final UUID ORDER = UUID.randomUUID();
     private static final BigDecimal AMOUNT = new BigDecimal("209.97");
+    private static final UUID EVENT = UUID.randomUUID();   // the StockReserved event being handled
 
     @Mock
     private PaymentRepository paymentRepository;
@@ -48,18 +56,27 @@ class PaymentServiceTest {
     @Mock
     private PaymentProvider paymentProvider;
 
+    @Mock
+    private ProcessedEvents processedEvents;
+
+    @Mock
+    private OutboxWriter outbox;
+
     private PaymentService paymentService;
 
     @BeforeEach
     void setUp() {
-        paymentService = new PaymentService(paymentRepository, paymentProvider);
+        // withoutTransaction(): just runs the code — there is no database in this test
+        paymentService = new PaymentService(paymentRepository, paymentProvider, processedEvents, outbox,
+                TransactionOperations.withoutTransaction());
+        lenient().when(processedEvents.markProcessed(EVENT)).thenReturn(true);   // a new event, unless a test says otherwise
     }
 
     @Test
     void successfulChargeIsStoredAsCompleted() {
         when(paymentRepository.findByOrderId(ORDER)).thenReturn(Optional.empty());
 
-        PaymentResponse response = paymentService.charge(ORDER, AMOUNT);
+        PaymentResponse response = paymentService.charge(EVENT, ORDER, AMOUNT);
 
         verify(paymentProvider).charge(ORDER, AMOUNT);
         ArgumentCaptor<Payment> saved = ArgumentCaptor.forClass(Payment.class);   // catches what was saved
@@ -68,6 +85,7 @@ class PaymentServiceTest {
         assertThat(saved.getValue().getAmount()).isEqualByComparingTo(AMOUNT);
         assertThat(response.id()).isEqualTo(saved.getValue().getId());
         assertThat(response.failureReason()).isNull();
+        verify(outbox).write(new PaymentCompleted(ORDER, response.id(), AMOUNT));   // the answer, saved with the payment
     }
 
     @Test
@@ -75,11 +93,12 @@ class PaymentServiceTest {
         when(paymentRepository.findByOrderId(ORDER)).thenReturn(Optional.empty());
         doThrow(new PaymentProviderException("provider down")).when(paymentProvider).charge(ORDER, AMOUNT);
 
-        PaymentResponse response = paymentService.charge(ORDER, AMOUNT);
+        PaymentResponse response = paymentService.charge(EVENT, ORDER, AMOUNT);
 
         assertThat(response.status()).isEqualTo(PaymentStatus.FAILED);
         assertThat(response.failureReason()).isEqualTo(PaymentService.PROVIDER_ERROR);
         verify(paymentRepository).saveAndFlush(any(Payment.class));   // a failure is recorded too
+        verify(outbox).write(new PaymentFailed(ORDER, response.id(), AMOUNT, PaymentService.PROVIDER_ERROR));
     }
 
     @Test
@@ -87,11 +106,26 @@ class PaymentServiceTest {
         Payment existing = Payment.completed(ORDER, AMOUNT);
         when(paymentRepository.findByOrderId(ORDER)).thenReturn(Optional.of(existing));
 
-        PaymentResponse response = paymentService.charge(ORDER, AMOUNT);
+        PaymentResponse response = paymentService.charge(EVENT, ORDER, AMOUNT);
 
         assertThat(response.id()).isEqualTo(existing.getId());
-        verifyNoInteractions(paymentProvider);   // no second charge
+        verifyNoInteractions(paymentProvider, outbox);   // no second charge, no second answer
         verify(paymentRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void anEventFinishedByAnotherDeliveryMeanwhileIsNotStoredAgain() {
+        Payment stored = Payment.completed(ORDER, AMOUNT);
+        when(paymentRepository.findByOrderId(ORDER))
+                .thenReturn(Optional.empty())       // 1st look: no payment yet
+                .thenReturn(Optional.of(stored));   // the other delivery's payment
+        when(processedEvents.markProcessed(EVENT)).thenReturn(false);   // ...which also marked the event
+
+        PaymentResponse response = paymentService.charge(EVENT, ORDER, AMOUNT);
+
+        assertThat(response.id()).isEqualTo(stored.getId());
+        verify(paymentRepository, never()).saveAndFlush(any());
+        verifyNoInteractions(outbox);
     }
 
     @Test
@@ -102,9 +136,10 @@ class PaymentServiceTest {
                 .thenReturn(Optional.of(winner));    // after our insert failed: the other charge's payment
         when(paymentRepository.saveAndFlush(any())).thenThrow(new DataIntegrityViolationException("duplicate key"));
 
-        PaymentResponse response = paymentService.charge(ORDER, AMOUNT);
+        PaymentResponse response = paymentService.charge(EVENT, ORDER, AMOUNT);
 
         assertThat(response.id()).isEqualTo(winner.getId());
+        verify(outbox, never()).write(any());   // the loser's answer is not sent (the failed insert came first)
     }
 
     @Test

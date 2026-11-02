@@ -5,11 +5,7 @@ import com.opspilot.events.EventEnvelope;
 import com.opspilot.events.EventJson;
 import com.opspilot.events.OrderCreated;
 import com.opspilot.events.Topics;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.kafka.autoconfigure.KafkaConnectionDetails;
@@ -22,9 +18,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -93,28 +87,8 @@ class OrderEventsIntegrationTest {
 
     // Every message on orders.events for this order (the topic also holds other tests' messages)
     private List<ConsumerRecord<String, String>> messagesFor(UUID orderId) {
-        Map<String, Object> config = Map.of(
-                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, String.join(",", kafka.getBootstrapServers()),
-                ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class,
-                ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(config)) {
-            List<TopicPartition> partitions = consumer.partitionsFor(Topics.ORDERS).stream()
-                    .map(info -> new TopicPartition(Topics.ORDERS, info.partition()))
-                    .toList();
-            consumer.assign(partitions);   // read the partitions directly: no consumer group, nothing committed
-            consumer.seekToBeginning(partitions);
-            Map<TopicPartition, Long> end = consumer.endOffsets(partitions);
-            List<ConsumerRecord<String, String>> found = new ArrayList<>();
-            long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
-            while (partitions.stream().anyMatch(partition -> consumer.position(partition) < end.get(partition))) {
-                assertThat(System.nanoTime()).as("reading %s in time", Topics.ORDERS).isLessThan(deadline);
-                for (ConsumerRecord<String, String> message : consumer.poll(Duration.ofMillis(200))) {
-                    if (message.key().equals(orderId.toString())) {
-                        found.add(message);
-                    }
-                }
-            }
-            return found;
-        }
+        return TopicReader.readAll(kafka.getBootstrapServers(), Topics.ORDERS).stream()
+                .filter(message -> message.key().equals(orderId.toString()))
+                .toList();
     }
 }

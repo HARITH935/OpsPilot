@@ -39,6 +39,11 @@ public class OrderItem {
         this.qty = qty;
     }
 
+    // Only Order.price() sets it: the price comes from inventory, never from the customer
+    void price(BigDecimal unitPrice) {
+        this.unitPrice = unitPrice;
+    }
+
     public Long getId() {
         return id;
     }

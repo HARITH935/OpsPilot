@@ -16,6 +16,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Entity
@@ -71,6 +72,24 @@ public class Order {
 
     public void addItem(String sku, int qty) {
         items.add(new OrderItem(this, sku, qty));
+    }
+
+    /**
+     * Inventory priced the order (StockReserved, ADR 0004): every item gets its unit price, the order inventory's
+     * total. All or nothing, only once, and only while the order is still PENDING.
+     */
+    public void price(Map<String, BigDecimal> unitPriceBySku, BigDecimal total) {
+        requirePending();
+        if (totalAmount != null) {
+            throw new IllegalStateException("Order " + id + " is already priced");
+        }
+        for (OrderItem item : items) {   // check every item first, so a missing price changes nothing
+            if (!unitPriceBySku.containsKey(item.getSku())) {
+                throw new IllegalArgumentException("No price for " + item.getSku() + " in order " + id);
+            }
+        }
+        items.forEach(item -> item.price(unitPriceBySku.get(item.getSku())));
+        this.totalAmount = total;
     }
 
     public void confirm() {

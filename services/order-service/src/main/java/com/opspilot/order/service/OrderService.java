@@ -1,6 +1,10 @@
 package com.opspilot.order.service;
 
+import com.opspilot.events.OrderCancelled;
 import com.opspilot.events.OrderCreated;
+import com.opspilot.events.StockRejected;
+import com.opspilot.events.StockReserved;
+import com.opspilot.messaging.consumer.ProcessedEvents;
 import com.opspilot.messaging.outbox.OutboxWriter;
 import com.opspilot.order.dto.CreateOrderRequest;
 import com.opspilot.order.dto.OrderResponse;
@@ -21,8 +25,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionOperations;
 
+import java.math.BigDecimal;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 public class OrderService {
@@ -31,11 +38,14 @@ public class OrderService {
 
     private final OrderRepository orderRepository;
     private final OutboxWriter outbox;
+    private final ProcessedEvents processedEvents;
     private final TransactionOperations transactions;
 
-    public OrderService(OrderRepository orderRepository, OutboxWriter outbox, TransactionOperations transactions) {
+    public OrderService(OrderRepository orderRepository, OutboxWriter outbox, ProcessedEvents processedEvents,
+                        TransactionOperations transactions) {
         this.orderRepository = orderRepository;
         this.outbox = outbox;
+        this.processedEvents = processedEvents;
         this.transactions = transactions;   // Spring Boot provides a TransactionTemplate: "run this block in a transaction"
     }
 
@@ -62,6 +72,43 @@ public class OrderService {
             log.info("Idempotency-Key {} was used concurrently; returning the order that won", idempotencyKey);
             return findReplay(idempotencyKey, fingerprint).orElseThrow(() -> e);
         }
+    }
+
+    /**
+     * StockReserved from inventory: copy its unit prices and total onto the order (ADR 0004). The order stays PENDING
+     * until the payment result. Handled once per event: the duplicate mark is saved in the same transaction.
+     */
+    public void onStockReserved(UUID eventId, StockReserved reserved) {
+        transactions.executeWithoutResult(tx -> {
+            if (!processedEvents.markProcessed(eventId)) {
+                log.info("Event {} for order {} was already handled, skipping the duplicate", eventId, reserved.orderId());
+                return;
+            }
+            Order order = orderRepository.findWithItemsById(reserved.orderId())
+                    .orElseThrow(() -> new OrderNotFoundException(reserved.orderId()));
+            Map<String, BigDecimal> prices = reserved.items().stream()
+                    .collect(Collectors.toMap(StockReserved.Item::sku, StockReserved.Item::unitPrice));
+            order.price(prices, reserved.totalAmount());   // saved at commit (JPA notices the change)
+            log.info("Order {} priced by inventory: total {}", order.getId(), reserved.totalAmount());
+        });
+    }
+
+    /**
+     * StockRejected from inventory: the order can't be fulfilled, so it is cancelled with inventory's reason and
+     * OrderCancelled is announced (via the outbox, same transaction). Handled once per event.
+     */
+    public void onStockRejected(UUID eventId, StockRejected rejected) {
+        transactions.executeWithoutResult(tx -> {
+            if (!processedEvents.markProcessed(eventId)) {
+                log.info("Event {} for order {} was already handled, skipping the duplicate", eventId, rejected.orderId());
+                return;
+            }
+            Order order = orderRepository.findById(rejected.orderId())
+                    .orElseThrow(() -> new OrderNotFoundException(rejected.orderId()));
+            order.cancel(rejected.reason());
+            outbox.write(new OrderCancelled(order.getId(), rejected.reason()));
+            log.info("Order {} cancelled: {} is {}", order.getId(), rejected.sku(), rejected.reason());
+        });
     }
 
     @Transactional(readOnly = true)   // read-only: no dirty checking, and the items can be read while mapping
