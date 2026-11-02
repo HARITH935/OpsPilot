@@ -41,8 +41,9 @@ Prometheus · Grafana · PyTorch · LangGraph · FastAPI · React · TypeScript
 
 ## Run locally
 Today (Phase 2 in progress): PostgreSQL and Kafka in Docker, the three services on your machine. Phase 2 connects
-the services through Kafka step by step (the order saga): so far an order is reserved and priced by inventory,
-charged by payment, and cancelled if out of stock. Phase 3 turns all of this into a single `docker compose up`.
+the services through Kafka step by step (the order saga): an order is reserved and priced by inventory, charged by
+payment, then confirmed (stock committed), or cancelled (out of stock, or payment failed and the stock released).
+Phase 3 turns all of this into a single `docker compose up`.
 
 **You need:** JDK 21 and Docker Desktop (running).
 
@@ -73,8 +74,9 @@ in front, e.g. `SERVER_PORT=18081` for order-service.
 | payment-service | 8082 | `curl localhost:8082/api/payments` | [README](services/payment-service/README.md) |
 
 Every service also has `/actuator/health` (plus `/liveness` and `/readiness`) and `/actuator/prometheus`.
-Until step 2.5, a paid order stays `PENDING` (priced, stock held): confirming it, or cancelling it and releasing the
-stock after a failed payment, is the saga's last step.
+With all three running, a new order is `CONFIRMED` about 1–2 s after the `POST` (check `GET /api/orders/{id}`).
+Start payment-service with `PAYMENT_FAILURE_RATE=1.0` in front to see the other ending: `CANCELLED` with reason
+`PAYMENT_FAILED`, and the stock back on sale.
 
 ## Progress
 See [docs/PROGRESS.md](docs/PROGRESS.md).

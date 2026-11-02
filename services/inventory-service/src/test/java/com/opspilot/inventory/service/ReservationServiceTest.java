@@ -2,6 +2,7 @@ package com.opspilot.inventory.service;
 
 import com.opspilot.events.OrderCreated;
 import com.opspilot.events.StockRejected;
+import com.opspilot.events.StockReleased;
 import com.opspilot.events.StockReserved;
 import com.opspilot.inventory.model.Product;
 import com.opspilot.inventory.model.Reservation;
@@ -208,6 +209,58 @@ class ReservationServiceTest {
                 new OrderCreated(ORDER, "c-1", List.of(new OrderCreated.Item("SKU-1", 2))));
 
         assertThat(result).isEmpty();
+        verifyNoInteractions(productRepository, reservationRepository, outbox);
+    }
+
+    @Test
+    void paymentCompletedCommitsTheHeldUnitsAndAnnouncesNothing() {
+        UUID eventId = UUID.randomUUID();
+        Product keyboard = product("SKU-1", "89.99", 10);
+        keyboard.reserve(2);
+        when(processedEvents.markProcessed(eventId)).thenReturn(true);
+        when(reservationRepository.findByOrderIdAndStatus(ORDER, ReservationStatus.HELD))
+                .thenReturn(List.of(new Reservation(ORDER, "SKU-1", 2)));
+        when(productRepository.findAllById(any())).thenReturn(List.of(keyboard));
+
+        assertThat(reservationService.onPaymentCompleted(eventId, ORDER)).isEqualTo(1);
+
+        assertThat(keyboard.getStock()).isEqualTo(8);
+        verifyNoInteractions(outbox);   // order confirms on PaymentCompleted itself; nobody waits for inventory
+    }
+
+    @Test
+    void paymentFailedReleasesTheHeldUnitsAndAnnouncesStockReleased() {
+        UUID eventId = UUID.randomUUID();
+        Product keyboard = product("SKU-1", "89.99", 10);
+        keyboard.reserve(2);
+        when(processedEvents.markProcessed(eventId)).thenReturn(true);
+        when(reservationRepository.findByOrderIdAndStatus(ORDER, ReservationStatus.HELD))
+                .thenReturn(List.of(new Reservation(ORDER, "SKU-1", 2)));
+        when(productRepository.findAllById(any())).thenReturn(List.of(keyboard));
+
+        assertThat(reservationService.onPaymentFailed(eventId, ORDER)).isEqualTo(1);
+
+        assertThat(keyboard.getAvailable()).isEqualTo(10);
+        verify(outbox).write(new StockReleased(ORDER));
+    }
+
+    @Test
+    void paymentFailedWithNothingHeldAnnouncesNothing() {
+        UUID eventId = UUID.randomUUID();
+        when(processedEvents.markProcessed(eventId)).thenReturn(true);
+        when(reservationRepository.findByOrderIdAndStatus(ORDER, ReservationStatus.HELD)).thenReturn(List.of());
+
+        assertThat(reservationService.onPaymentFailed(eventId, ORDER)).isZero();   // e.g. released earlier
+        verifyNoInteractions(outbox);   // nothing was given back, so no StockReleased
+    }
+
+    @Test
+    void aDuplicatePaymentEventChangesNothing() {
+        UUID eventId = UUID.randomUUID();
+        when(processedEvents.markProcessed(eventId)).thenReturn(false);   // handled before
+
+        assertThat(reservationService.onPaymentCompleted(eventId, ORDER)).isZero();
+        assertThat(reservationService.onPaymentFailed(eventId, ORDER)).isZero();
         verifyNoInteractions(productRepository, reservationRepository, outbox);
     }
 

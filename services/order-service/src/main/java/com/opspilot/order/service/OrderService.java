@@ -1,7 +1,10 @@
 package com.opspilot.order.service;
 
 import com.opspilot.events.OrderCancelled;
+import com.opspilot.events.OrderConfirmed;
 import com.opspilot.events.OrderCreated;
+import com.opspilot.events.PaymentCompleted;
+import com.opspilot.events.PaymentFailed;
 import com.opspilot.events.StockRejected;
 import com.opspilot.events.StockReserved;
 import com.opspilot.messaging.consumer.ProcessedEvents;
@@ -35,6 +38,8 @@ import java.util.stream.Collectors;
 public class OrderService {
 
     private static final Logger log = LoggerFactory.getLogger(OrderService.class);
+
+    static final String PAYMENT_FAILED = "PAYMENT_FAILED";   // cancel reason; the provider's own reason stays in payment
 
     private final OrderRepository orderRepository;
     private final OutboxWriter outbox;
@@ -75,8 +80,9 @@ public class OrderService {
     }
 
     /**
-     * StockReserved from inventory: copy its unit prices and total onto the order (ADR 0004). The order stays PENDING
-     * until the payment result. Handled once per event: the duplicate mark is saved in the same transaction.
+     * StockReserved from inventory: copy its unit prices and total onto the order (ADR 0004). The status is left
+     * alone: the payment result decides it, and it may even have been applied already (it comes on another topic).
+     * Handled once per event: the duplicate mark is saved in the same transaction.
      */
     public void onStockReserved(UUID eventId, StockReserved reserved) {
         transactions.executeWithoutResult(tx -> {
@@ -108,6 +114,42 @@ public class OrderService {
             order.cancel(rejected.reason());
             outbox.write(new OrderCancelled(order.getId(), rejected.reason()));
             log.info("Order {} cancelled: {} is {}", order.getId(), rejected.sku(), rejected.reason());
+        });
+    }
+
+    /**
+     * PaymentCompleted from payment: the order is CONFIRMED and OrderConfirmed is announced (via the outbox, same
+     * transaction). Handled once per event.
+     */
+    public void onPaymentCompleted(UUID eventId, PaymentCompleted completed) {
+        transactions.executeWithoutResult(tx -> {
+            if (!processedEvents.markProcessed(eventId)) {
+                log.info("Event {} for order {} was already handled, skipping the duplicate", eventId, completed.orderId());
+                return;
+            }
+            Order order = orderRepository.findById(completed.orderId())
+                    .orElseThrow(() -> new OrderNotFoundException(completed.orderId()));
+            order.confirm();
+            outbox.write(new OrderConfirmed(order.getId()));
+            log.info("Order {} confirmed: payment {} of {} completed", order.getId(), completed.paymentId(), completed.amount());
+        });
+    }
+
+    /**
+     * PaymentFailed from payment: the order is CANCELLED with reason PAYMENT_FAILED and OrderCancelled is announced.
+     * Inventory releases the held stock on its own, when it reads the same PaymentFailed. Handled once per event.
+     */
+    public void onPaymentFailed(UUID eventId, PaymentFailed failed) {
+        transactions.executeWithoutResult(tx -> {
+            if (!processedEvents.markProcessed(eventId)) {
+                log.info("Event {} for order {} was already handled, skipping the duplicate", eventId, failed.orderId());
+                return;
+            }
+            Order order = orderRepository.findById(failed.orderId())
+                    .orElseThrow(() -> new OrderNotFoundException(failed.orderId()));
+            order.cancel(PAYMENT_FAILED);
+            outbox.write(new OrderCancelled(order.getId(), PAYMENT_FAILED));
+            log.info("Order {} cancelled: payment {} failed ({})", order.getId(), failed.paymentId(), failed.reason());
         });
     }
 

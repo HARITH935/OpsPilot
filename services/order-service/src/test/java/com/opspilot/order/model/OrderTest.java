@@ -66,20 +66,33 @@ class OrderTest {
     }
 
     @Test
-    void anOrderIsPricedOnlyOnceAndOnlyWhilePending() {
-        Order priced = new Order("customer-1");
-        priced.addItem("SKU-1", 1);
-        priced.price(Map.of("SKU-1", BigDecimal.ONE), BigDecimal.ONE);
-        Order cancelled = new Order("customer-1");
-        cancelled.addItem("SKU-1", 1);
-        cancelled.cancel("OUT_OF_STOCK");
+    void anOrderIsPricedOnlyOnce() {
+        Order order = new Order("customer-1");
+        order.addItem("SKU-1", 1);
+        order.price(Map.of("SKU-1", BigDecimal.ONE), BigDecimal.ONE);
 
-        assertThatThrownBy(() -> priced.price(Map.of("SKU-1", BigDecimal.TEN), BigDecimal.TEN))
+        assertThatThrownBy(() -> order.price(Map.of("SKU-1", BigDecimal.TEN), BigDecimal.TEN))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("already priced");
-        assertThatThrownBy(() -> cancelled.price(Map.of("SKU-1", BigDecimal.ONE), BigDecimal.ONE))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("already CANCELLED");
+        assertThat(order.getTotalAmount()).isEqualByComparingTo(BigDecimal.ONE);
+    }
+
+    @Test
+    void anOrderDecidedBeforeItsPriceArrivedCanStillBePriced() {
+        Order confirmed = new Order("customer-1");   // PaymentCompleted was applied before StockReserved
+        confirmed.addItem("SKU-1", 2);
+        confirmed.confirm();
+        Order cancelled = new Order("customer-1");   // PaymentFailed was applied before StockReserved
+        cancelled.addItem("SKU-1", 2);
+        cancelled.cancel("PAYMENT_FAILED");
+
+        confirmed.price(Map.of("SKU-1", new BigDecimal("4.50")), new BigDecimal("9.00"));
+        cancelled.price(Map.of("SKU-1", new BigDecimal("4.50")), new BigDecimal("9.00"));
+
+        assertThat(confirmed.getStatus()).isEqualTo(OrderStatus.CONFIRMED);   // pricing never changes the status
+        assertThat(confirmed.getTotalAmount()).isEqualByComparingTo("9.00");
+        assertThat(cancelled.getStatus()).isEqualTo(OrderStatus.CANCELLED);
+        assertThat(cancelled.getItems()).extracting(OrderItem::getUnitPrice).containsExactly(new BigDecimal("4.50"));
     }
 
     @Test

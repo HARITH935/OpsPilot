@@ -1,7 +1,10 @@
 package com.opspilot.order.service;
 
 import com.opspilot.events.OrderCancelled;
+import com.opspilot.events.OrderConfirmed;
 import com.opspilot.events.OrderCreated;
+import com.opspilot.events.PaymentCompleted;
+import com.opspilot.events.PaymentFailed;
 import com.opspilot.events.StockRejected;
 import com.opspilot.events.StockReserved;
 import com.opspilot.messaging.consumer.ProcessedEvents;
@@ -187,6 +190,59 @@ class OrderServiceTest {
         orderService.onStockReserved(eventId, new StockReserved(orderId, List.of(), BigDecimal.ONE));
 
         verifyNoInteractions(orderRepository, outbox);
+    }
+
+    @Test
+    void paymentCompletedConfirmsTheOrderAndAnnouncesIt() {
+        UUID eventId = UUID.randomUUID();
+        Order order = new Order("c-1");
+        when(processedEvents.markProcessed(eventId)).thenReturn(true);
+        when(orderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+
+        orderService.onPaymentCompleted(eventId, new PaymentCompleted(order.getId(), UUID.randomUUID(), BigDecimal.TEN));
+
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.CONFIRMED);
+        verify(outbox).write(new OrderConfirmed(order.getId()));
+    }
+
+    @Test
+    void paymentFailedCancelsTheOrderAndAnnouncesIt() {
+        UUID eventId = UUID.randomUUID();
+        Order order = new Order("c-1");
+        when(processedEvents.markProcessed(eventId)).thenReturn(true);
+        when(orderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+
+        orderService.onPaymentFailed(eventId,
+                new PaymentFailed(order.getId(), UUID.randomUUID(), BigDecimal.TEN, "PROVIDER_ERROR"));
+
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.CANCELLED);
+        assertThat(order.getCancelReason()).isEqualTo("PAYMENT_FAILED");
+        verify(outbox).write(new OrderCancelled(order.getId(), "PAYMENT_FAILED"));
+    }
+
+    @Test
+    void aDuplicatePaymentEventChangesNothing() {
+        UUID eventId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        when(processedEvents.markProcessed(eventId)).thenReturn(false);   // handled before
+
+        orderService.onPaymentCompleted(eventId, new PaymentCompleted(orderId, UUID.randomUUID(), BigDecimal.TEN));
+        orderService.onPaymentFailed(eventId, new PaymentFailed(orderId, UUID.randomUUID(), BigDecimal.TEN, "X"));
+
+        verifyNoInteractions(orderRepository, outbox);
+    }
+
+    @Test
+    void aPaymentForAnUnknownOrderFails() {   // the error handler retries it, then parks it in payments.events.dlq
+        UUID eventId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        when(processedEvents.markProcessed(eventId)).thenReturn(true);
+        when(orderRepository.findById(orderId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> orderService.onPaymentCompleted(eventId,
+                new PaymentCompleted(orderId, UUID.randomUUID(), BigDecimal.TEN)))
+                .isInstanceOf(OrderNotFoundException.class);
+        verifyNoInteractions(outbox);
     }
 
     @Test

@@ -10,7 +10,7 @@ spring:
     hibernate:
       ddl-auto: validate       # Flyway owns the schema; Hibernate only checks entities match it
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}   # Kafka from deploy/docker; the outbox publisher sends here
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}   # Kafka from deploy/docker: reads inventory.events + payments.events, sends via the outbox
 
 server:
   port: ${SERVER_PORT:8081}   # env var SERVER_PORT, default 8081

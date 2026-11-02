@@ -58,12 +58,21 @@ The list endpoint returns summaries without items, so it never runs one extra qu
 | Direction | Topic | Event | When / what order-service does |
 |---|---|---|---|
 | out | `orders.events` | `OrderCreated` `{orderId, customerId, items[sku, qty]}` | a new order is placed (not on an idempotent replay) |
-| in | `inventory.events` | `StockReserved` `{orderId, items[sku, qty, unitPrice], totalAmount}` | copies the unit prices and total onto the order ([ADR 0004](../../docs/adr/0004-orders-priced-by-inventory.md)); it stays `PENDING` until the payment result |
-| in | `inventory.events` | `StockRejected` `{orderId, sku, reason}` | cancels the order with that reason (e.g. `OUT_OF_STOCK`) and announces ↓ |
+| in | `inventory.events` | `StockReserved` `{orderId, items[sku, qty, unitPrice], totalAmount}` | copies the unit prices and total onto the order ([ADR 0004](../../docs/adr/0004-orders-priced-by-inventory.md)); the status is left to the payment result |
+| in | `inventory.events` | `StockRejected` `{orderId, sku, reason}` | cancels the order with that reason (e.g. `OUT_OF_STOCK`) and announces `OrderCancelled` |
+| in | `payments.events` | `PaymentCompleted` `{orderId, paymentId, amount}` | confirms the order and announces ↓ |
+| out | `orders.events` | `OrderConfirmed` `{orderId}` | the order is final: paid, stock committed by inventory |
+| in | `payments.events` | `PaymentFailed` `{orderId, paymentId, amount, reason}` | cancels the order with reason `PAYMENT_FAILED` and announces ↓ |
 | out | `orders.events` | `OrderCancelled` `{orderId, reason}` | the order was cancelled |
 
-Every event is keyed by the order id. `InventoryEventsListener` (consumer group `order-service`) handles each
-inventory event once: the duplicate mark in `processed_events` is saved in the same transaction as the change.
+Every event is keyed by the order id. `InventoryEventsListener` and `PaymentEventsListener` (both consumer group
+`order-service`) handle each event once: the duplicate mark in `processed_events` is saved in the same transaction as
+the change. An order is decided once (`PENDING` → `CONFIRMED` or `CANCELLED`).
+
+**Price and payment result may arrive in either order.** They come on different topics, read by two listeners on
+their own threads, so the payment result can be applied before the price. Pricing therefore works in any status (but
+only once), and the order ends the same either way. If both listeners change the same order at the same moment,
+`@Version` makes one fail and the error handler retries it 0.5 s later.
 Outgoing events are written to the `outbox` table in the same transaction as the order, then sent by the outbox publisher from
 [`common-messaging`](../common-messaging/README.md) (usually within ~0.1 s; at-least-once). Watch them arrive:
 ```bash
@@ -98,5 +107,5 @@ Never edit a merged migration — add the next `V<n>__...sql`.
 
 ## Packages
 `controller` → `service` → `repository` → database. `dto` = API shapes, `model` = JPA entities,
-`event` = the Kafka listener (`InventoryEventsListener`; the outbox itself lives in `common-messaging`), `config` = Spring config
+`event` = the Kafka listeners (`InventoryEventsListener`, `PaymentEventsListener`; the outbox itself lives in `common-messaging`), `config` = Spring config
 (`MessagingConfig` turns on the outbox publisher), `exception` = error handling.

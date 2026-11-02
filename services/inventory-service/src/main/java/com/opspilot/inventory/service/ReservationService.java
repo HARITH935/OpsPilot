@@ -3,6 +3,7 @@ package com.opspilot.inventory.service;
 import com.opspilot.events.EventPayload;
 import com.opspilot.events.OrderCreated;
 import com.opspilot.events.StockRejected;
+import com.opspilot.events.StockReleased;
 import com.opspilot.events.StockReserved;
 import com.opspilot.inventory.model.Product;
 import com.opspilot.inventory.model.Reservation;
@@ -80,6 +81,40 @@ public class ReservationService {
             outbox.write(toEvent(result));   // the saga's next step: payment charges it, or order cancels it
             return result;
         }));
+    }
+
+    /**
+     * A PaymentCompleted event from Kafka: the order is paid, so its held units leave the warehouse (commit). Handled
+     * once per event; the duplicate mark and the commit share one transaction, and a stock conflict repeats both.
+     * Returns how many reservations changed: 0 for a duplicate, or if nothing was held.
+     */
+    public int onPaymentCompleted(UUID eventId, UUID orderId) {
+        return transactions.execute(tx -> {
+            if (!processedEvents.markProcessed(eventId)) {
+                log.info("Event {} for order {} was already handled, skipping the duplicate", eventId, orderId);
+                return 0;
+            }
+            return settle(orderId, true);
+        });
+    }
+
+    /**
+     * A PaymentFailed event from Kafka: the saga's compensation. The held units go back on sale (release) and
+     * StockReleased is announced (via the outbox, same transaction), but only if something was actually held.
+     * Handled once per event, like onPaymentCompleted. Returns how many reservations changed.
+     */
+    public int onPaymentFailed(UUID eventId, UUID orderId) {
+        return transactions.execute(tx -> {
+            if (!processedEvents.markProcessed(eventId)) {
+                log.info("Event {} for order {} was already handled, skipping the duplicate", eventId, orderId);
+                return 0;
+            }
+            int released = settle(orderId, false);
+            if (released > 0) {
+                outbox.write(new StockReleased(orderId));
+            }
+            return released;
+        });
     }
 
     /**

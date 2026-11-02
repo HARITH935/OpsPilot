@@ -76,10 +76,12 @@ public class Order {
 
     /**
      * Inventory priced the order (StockReserved, ADR 0004): every item gets its unit price, the order inventory's
-     * total. All or nothing, only once, and only while the order is still PENDING.
+     * total. All or nothing, and only once.
+     *
+     * <p>Allowed in any status: the price and the payment result come on different topics, so the payment result may
+     * be applied first. Pricing doesn't depend on the status, so the order ends the same whichever comes first.
      */
     public void price(Map<String, BigDecimal> unitPriceBySku, BigDecimal total) {
-        requirePending();
         if (totalAmount != null) {
             throw new IllegalStateException("Order " + id + " is already priced");
         }
