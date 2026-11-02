@@ -1,4 +1,5 @@
--- The outbox table exactly as every service's V1 Flyway migration creates it (tests only: here there is no service)
+-- The outbox and processed_events tables exactly as every service's V1 Flyway migration creates them
+-- (tests only: here there is no service)
 CREATE TABLE outbox (
     id           UUID          PRIMARY KEY,
     aggregate_id UUID          NOT NULL,
@@ -8,3 +9,7 @@ CREATE TABLE outbox (
     published_at TIMESTAMPTZ
 );
 CREATE INDEX idx_outbox_unpublished ON outbox (created_at) WHERE published_at IS NULL;
+CREATE TABLE processed_events (
+    event_id     UUID          PRIMARY KEY,
+    processed_at TIMESTAMPTZ   NOT NULL DEFAULT now()
+);

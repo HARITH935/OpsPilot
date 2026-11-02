@@ -14,6 +14,8 @@ spring:
         # Send UPDATEs sorted by primary key: every transaction locks products in the same (SKU) order,
         # so two orders holding the same products can never wait on each other forever (a deadlock)
         order_updates: true
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}   # Kafka from deploy/docker: reads orders.events, sends via the outbox
 
 server:
   port: ${SERVER_PORT:8083}   # env var SERVER_PORT, default 8083

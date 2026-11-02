@@ -1,5 +1,8 @@
 package com.opspilot.inventory.service;
 
+import com.opspilot.events.OrderCreated;
+import com.opspilot.events.StockRejected;
+import com.opspilot.events.StockReserved;
 import com.opspilot.inventory.model.Product;
 import com.opspilot.inventory.model.Reservation;
 import com.opspilot.inventory.model.ReservationStatus;
@@ -8,6 +11,8 @@ import com.opspilot.inventory.repository.ReservationRepository;
 import com.opspilot.inventory.service.ReservationResult.Reason;
 import com.opspilot.inventory.service.ReservationResult.Rejected;
 import com.opspilot.inventory.service.ReservationResult.Reserved;
+import com.opspilot.messaging.consumer.ProcessedEvents;
+import com.opspilot.messaging.outbox.OutboxWriter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -18,6 +23,7 @@ import org.springframework.transaction.support.TransactionOperations;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -29,7 +35,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-// Pure unit test: the repositories are Mockito mocks. Without Spring there is no @Retryable here;
+// Pure unit test: the repositories, the duplicate check and the outbox are Mockito mocks. Without Spring there is no @Retryable here;
 // ReservationRetryTest covers the retries.
 @ExtendWith(MockitoExtension.class)
 class ReservationServiceTest {
@@ -42,13 +48,19 @@ class ReservationServiceTest {
     @Mock
     private ReservationRepository reservationRepository;
 
+    @Mock
+    private ProcessedEvents processedEvents;
+
+    @Mock
+    private OutboxWriter outbox;
+
     private ReservationService reservationService;
 
     @BeforeEach
     void setUp() {
         // withoutTransaction(): just runs the code — there is no database in this test
-        reservationService = new ReservationService(
-                productRepository, reservationRepository, TransactionOperations.withoutTransaction());
+        reservationService = new ReservationService(productRepository, reservationRepository, processedEvents, outbox,
+                TransactionOperations.withoutTransaction());
     }
 
     @Test
@@ -159,6 +171,44 @@ class ReservationServiceTest {
         assertThat(reservationService.release(ORDER)).isZero();   // e.g. a rejected order, or a repeated release
         assertThat(reservationService.commit(ORDER)).isZero();
         verifyNoInteractions(productRepository);
+    }
+
+    @Test
+    void orderCreatedIsReservedAndAnsweredWithStockReserved() {
+        UUID eventId = UUID.randomUUID();
+        when(processedEvents.markProcessed(eventId)).thenReturn(true);   // a new event
+        when(productRepository.findAllById(any())).thenReturn(List.of(product("SKU-1", "89.99", 10)));
+
+        Optional<ReservationResult> result = reservationService.reserveForOrder(eventId,
+                new OrderCreated(ORDER, "c-1", List.of(new OrderCreated.Item("SKU-1", 2))));
+
+        assertThat(result).containsInstanceOf(Reserved.class);
+        verify(outbox).write(new StockReserved(ORDER,   // the prices travel with the event (ADR 0004)
+                List.of(new StockReserved.Item("SKU-1", 2, new BigDecimal("89.99"))), new BigDecimal("179.98")));
+    }
+
+    @Test
+    void orderCreatedThatCannotBeReservedIsAnsweredWithStockRejected() {
+        UUID eventId = UUID.randomUUID();
+        when(processedEvents.markProcessed(eventId)).thenReturn(true);
+        when(productRepository.findAllById(any())).thenReturn(List.of(product("SKU-10", "24.99", 3)));
+
+        reservationService.reserveForOrder(eventId,
+                new OrderCreated(ORDER, "c-1", List.of(new OrderCreated.Item("SKU-10", 5))));
+
+        verify(outbox).write(new StockRejected(ORDER, "SKU-10", "OUT_OF_STOCK"));
+    }
+
+    @Test
+    void aDuplicateEventChangesNothingAndSendsNothing() {
+        UUID eventId = UUID.randomUUID();
+        when(processedEvents.markProcessed(eventId)).thenReturn(false);   // handled before
+
+        Optional<ReservationResult> result = reservationService.reserveForOrder(eventId,
+                new OrderCreated(ORDER, "c-1", List.of(new OrderCreated.Item("SKU-1", 2))));
+
+        assertThat(result).isEmpty();
+        verifyNoInteractions(productRepository, reservationRepository, outbox);
     }
 
     private static Product product(String sku, String price, int stock) {

@@ -1,10 +1,13 @@
 package com.opspilot.inventory.service;
 
+import com.opspilot.events.OrderCreated;
 import com.opspilot.inventory.config.RetryConfig;
 import com.opspilot.inventory.model.Product;
 import com.opspilot.inventory.repository.ProductRepository;
 import com.opspilot.inventory.repository.ReservationRepository;
 import com.opspilot.inventory.service.ReservationResult.Reserved;
+import com.opspilot.messaging.consumer.ProcessedEvents;
+import com.opspilot.messaging.outbox.OutboxWriter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -51,6 +54,12 @@ class ReservationRetryTest {
     @MockitoBean
     private ReservationRepository reservationRepository;
 
+    @MockitoBean
+    private ProcessedEvents processedEvents;
+
+    @MockitoBean
+    private OutboxWriter outbox;
+
     @BeforeEach
     void productIsInStock() {
         // A fresh product for every attempt, like a real re-read from the database
@@ -81,6 +90,21 @@ class ReservationRetryTest {
         // One event per failed attempt (6), plus one saying "gave up"
         assertThat(events.stream(MethodRetryEvent.class)).hasSize(7);
         assertThat(events.stream(MethodRetryEvent.class).filter(MethodRetryEvent::isRetryAborted)).hasSize(1);
+    }
+
+    @Test
+    void anEventIsRetriedAsAWholeAfterAConflict() {
+        UUID eventId = UUID.randomUUID();
+        when(processedEvents.markProcessed(eventId)).thenReturn(true);
+        doThrow(new ObjectOptimisticLockingFailureException(Product.class, "SKU-1"))
+                .doNothing()
+                .when(productRepository).flush();
+
+        reservationService.reserveForOrder(eventId, new OrderCreated(ORDER, "c-1", List.of(new OrderCreated.Item("SKU-1", 1))));
+
+        // The whole transaction ran again: duplicate check, reservation, and only then the reply event
+        verify(processedEvents, times(2)).markProcessed(eventId);
+        verify(outbox, times(1)).write(any());
     }
 
     @Test

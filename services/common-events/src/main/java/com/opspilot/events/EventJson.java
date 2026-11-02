@@ -18,6 +18,9 @@ public final class EventJson {
             .disable(DateTimeFeature.WRITE_DATES_AS_TIMESTAMPS)   // times as text, "2026-11-01T10:00:00Z", not numbers
             // Ignore fields this code doesn't know: a newer service may add one without breaking older readers
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            // Keep decimals exact while reading: the payload is first read as a JSON tree, which would otherwise hold
+            // 12.50 as a double (12.5) and could lose digits of long amounts
+            .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
             .build();   // a JsonMapper is thread-safe once built, so one shared instance is enough
 
     private EventJson() {

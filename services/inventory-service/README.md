@@ -1,7 +1,8 @@
 # inventory-service (:8083)
 
-Product catalogue, stock, and stock reservations for the order saga. Next (Phase 2): Kafka events drive the
-reservations, and a Redis cache serves product reads.
+Product catalogue, stock, and stock reservations for the order saga. It reacts to `OrderCreated` from Kafka by
+reserving the stock and answering `StockReserved` / `StockRejected`. Next (Phase 2): commit / release on the payment
+result, and a Redis cache for product reads.
 
 ## Run
 Needs the local Postgres from `deploy/docker` running (see its README).
@@ -11,14 +12,16 @@ export DB_PASSWORD=$(grep '^INVENTORY_DB_PASSWORD=' ../deploy/docker/.env | cut 
 ./mvnw -pl inventory-service spring-boot:run   # starts on :8083
 ```
 On startup Flyway applies any new `db/migration/V*.sql` files (the very first start also loads 10 demo products),
-then Hibernate checks the entities match the tables.
+then Hibernate checks the entities match the tables. With Kafka running (also `deploy/docker`) it starts reading
+`orders.events` where it stopped last time (its very first start reads the topic from the beginning).
 
 ## Test
 ```bash
 cd services
 ./mvnw -pl inventory-service verify
 ```
-Needs Docker running: repository, health and end-to-end tests start their own throwaway Postgres (Testcontainers).
+Needs Docker running: the tests start their own throwaway Postgres, and the full-app tests a throwaway Kafka too
+(Testcontainers), so they never touch the containers in `deploy/docker`.
 
 ## API
 | Method + path | Success | Errors |
@@ -44,12 +47,32 @@ A product: `{"sku":"SKU-1","name":"Mechanical Keyboard","price":89.99,"stock":50
 - Errors use **RFC 9457 Problem Details** (`application/problem+json`), the same format as order-service:
   `{"title":"Bad Request","status":400,"errors":{"price":"must be greater than 0"}}`
 
+## Events
+| Direction | Topic | Event | What inventory does |
+|---|---|---|---|
+| in | `orders.events` | `OrderCreated` | reserves the stock (all or nothing) and answers ↓ |
+| out | `inventory.events` | `StockReserved` `{orderId, items[sku, qty, unitPrice], totalAmount}` | stock held, order priced |
+| out | `inventory.events` | `StockRejected` `{orderId, sku, reason}` | nothing held: `UNKNOWN_PRODUCT` / `OUT_OF_STOCK` |
+
+`OrderEventsListener` (consumer group `inventory-service`) calls `ReservationService.reserveForOrder`, which does
+three things in **one transaction**: record the event id in `processed_events`, reserve, write the answer to the
+outbox. So a redelivered event is skipped ("already handled, skipping the duplicate"), and a stock conflict retries
+all three together. Other order events are ignored until step 2.5. A message that still fails after 3 retries (or
+that isn't a readable event) is moved to `orders.events.dlq` and logged as `Moving message ... to orders.events.dlq`;
+see [`common-messaging`](../common-messaging/README.md).
+```bash
+docker exec -it opspilot-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+  --topic inventory.events --from-beginning --formatter-property print.key=true
+docker exec opspilot-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
+  --describe --group inventory-service   # how far inventory has read (LAG 0 = everything)
+```
+
 ## Stock reservations (no HTTP endpoint)
-`ReservationService` holds stock while an order is being paid. From Phase 2 the saga's Kafka events call it.
+`ReservationService` holds stock while an order is being paid; the saga's Kafka events call it.
 
 | Method | Called on (Phase 2) | Effect |
 |---|---|---|
-| `reserve(orderId, items)` | `OrderCreated` | **All or nothing:** every item held (`reserved += qty`) → `Reserved` with unit prices + total (inventory prices orders, [ADR 0004](../../docs/adr/0004-orders-priced-by-inventory.md)) · or nothing held → `Rejected` (`UNKNOWN_PRODUCT` / `OUT_OF_STOCK`) |
+| `reserve(orderId, items)` — via `reserveForOrder(eventId, OrderCreated)` | `OrderCreated` | **All or nothing:** every item held (`reserved += qty`) → `Reserved` with unit prices + total (inventory prices orders, [ADR 0004](../../docs/adr/0004-orders-priced-by-inventory.md)) · or nothing held → `Rejected` (`UNKNOWN_PRODUCT` / `OUT_OF_STOCK`) |
 | `commit(orderId)` | `PaymentCompleted` | The held units leave the warehouse: `stock -= qty`, `reserved -= qty` |
 | `release(orderId)` | `PaymentFailed` (or the order is cancelled) | The held units are on sale again: `reserved -= qty` |
 
@@ -73,6 +96,7 @@ A product: `{"sku":"SKU-1","name":"Mechanical Keyboard","price":89.99,"stock":50
 | `DB_URL` | `jdbc:postgresql://localhost:5432/inventory` | JDBC URL of the inventory database |
 | `DB_USERNAME` | `inventory_user` | Database login |
 | `DB_PASSWORD` | — (required) | Database password |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka address (`kafka:19092` from inside Docker) |
 
 ## Database
 Migrations in `src/main/resources/db/migration/`:
@@ -84,4 +108,5 @@ Never edit a merged migration — add the next `V<n>__...sql`.
 
 ## Packages
 `controller` → `service` → `repository` → database. `dto` = API shapes, `model` = JPA entities,
-`event` = domain events / outbox, `config` = Spring config, `exception` = error handling.
+`event` = the Kafka listener (`OrderEventsListener`), `config` = Spring config (`MessagingConfig` turns on the outbox
+and the listener's shared settings), `exception` = error handling.

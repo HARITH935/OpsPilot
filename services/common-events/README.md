@@ -58,7 +58,8 @@ switch (event.payload()) {
     default -> { }   // events this service doesn't react to
 }
 ```
-- Times are ISO-8601 text, money is exact (`BigDecimal`), ids are UUID strings.
+- Times are ISO-8601 text, ids are UUID strings, money is exact (`BigDecimal`): `12.50` stays `12.50` when read
+  back (decimals are never turned into a `double` on the way).
 - **Tolerant reader:** fields it doesn't know are ignored, so a newer service can add one without breaking older
   readers. Reasons are plain strings (not enums) for the same reason.
 - An unknown `eventType` is refused with an `IllegalArgumentException`.
