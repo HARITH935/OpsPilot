@@ -1,5 +1,7 @@
 package com.opspilot.order.service;
 
+import com.opspilot.events.OrderCreated;
+import com.opspilot.messaging.outbox.OutboxWriter;
 import com.opspilot.order.dto.CreateOrderRequest;
 import com.opspilot.order.dto.OrderItemRequest;
 import com.opspilot.order.dto.OrderResponse;
@@ -37,7 +39,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-// Pure unit test: the repository is a Mockito mock, so there is no Spring and no database
+// Pure unit test: the repository and the outbox are Mockito mocks, so there is no Spring, database or Kafka
 @ExtendWith(MockitoExtension.class)
 class OrderServiceTest {
 
@@ -48,12 +50,15 @@ class OrderServiceTest {
     @Mock
     private OrderRepository orderRepository;
 
+    @Mock
+    private OutboxWriter outbox;
+
     private OrderService orderService;
 
     @BeforeEach
     void setUp() {
         // withoutTransaction(): just runs the code — there is no database in this test
-        orderService = new OrderService(orderRepository, TransactionOperations.withoutTransaction());
+        orderService = new OrderService(orderRepository, outbox, TransactionOperations.withoutTransaction());
     }
 
     @Test
@@ -70,6 +75,15 @@ class OrderServiceTest {
                 .containsExactly(tuple("SKU-1", 2), tuple("SKU-2", 1));
         assertThat(result.replayed()).isFalse();
         verify(orderRepository, never()).findByIdempotencyKey(any());
+    }
+
+    @Test
+    void createOrderWritesOrderCreatedToTheOutbox() {
+        CreateOrderResult result = orderService.createOrder(REQUEST, null);
+
+        verify(outbox).write(new OrderCreated(result.orderId(), "c-1", List.of(
+                new OrderCreated.Item("SKU-1", 2),
+                new OrderCreated.Item("SKU-2", 1))));
     }
 
     @Test
@@ -95,6 +109,7 @@ class OrderServiceTest {
         assertThat(result.orderId()).isEqualTo(original.getId());
         assertThat(result.replayed()).isTrue();
         verify(orderRepository, never()).saveAndFlush(any());
+        verify(outbox, never()).write(any());   // the original order's event was already written: no second one
     }
 
     @Test
@@ -119,6 +134,7 @@ class OrderServiceTest {
 
         assertThat(result.orderId()).isEqualTo(winner.getId());
         assertThat(result.replayed()).isTrue();
+        verify(outbox, never()).write(any());   // only the winner's order has an event
     }
 
     @Test

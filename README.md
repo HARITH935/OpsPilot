@@ -29,7 +29,7 @@ Prometheus · Grafana · PyTorch · LangGraph · FastAPI · React · TypeScript
 ## Repository layout
 | Path | What's inside |
 |---|---|
-| `services/` | Java microservices + shared event module |
+| `services/` | Java microservices + shared event and messaging modules |
 | `ml/anomaly-detector/` | LSTM autoencoder training + serving |
 | `agent/` | LangGraph agents + MCP tool servers |
 | `dashboard/` | React Command Center |
@@ -40,9 +40,9 @@ Prometheus · Grafana · PyTorch · LangGraph · FastAPI · React · TypeScript
 | `docs/` | Progress, ADRs, runbooks |
 
 ## Run locally
-Today (Phase 2 in progress): PostgreSQL and Kafka in Docker, the three services on your machine. Each service still
-works on its own: Kafka is running, and Phase 2 connects the services through it step by step (the order saga).
-Phase 3 turns all of this into a single `docker compose up`.
+Today (Phase 2 in progress): PostgreSQL and Kafka in Docker, the three services on your machine. Phase 2 connects
+the services through Kafka step by step (the order saga): so far order-service publishes `OrderCreated`, and nothing
+reacts to it yet. Phase 3 turns all of this into a single `docker compose up`.
 
 **You need:** JDK 21 and Docker Desktop (running).
 
@@ -73,8 +73,8 @@ in front, e.g. `SERVER_PORT=18081` for order-service.
 | payment-service | 8082 | `curl localhost:8082/api/payments` | [README](services/payment-service/README.md) |
 
 Every service also has `/actuator/health` (plus `/liveness` and `/readiness`) and `/actuator/prometheus`.
-Until the saga is connected (Phase 2, steps 2.2–2.5), a new order stays `PENDING` without prices: nothing reserves its
-stock or charges it yet.
+Until the saga is connected (Phase 2, steps 2.3–2.5), a new order stays `PENDING` without prices: its `OrderCreated`
+event reaches Kafka, but nothing reserves the stock or charges it yet.
 
 ## Progress
 See [docs/PROGRESS.md](docs/PROGRESS.md).

@@ -34,10 +34,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-// End to end inside one JVM: HTTP request → controller → service → real Postgres (Testcontainers) and back
+// End to end inside one JVM: HTTP request → controller → service → real Postgres (Testcontainers) and back.
+// Kafka is imported too, because the whole app (with the outbox publisher) starts.
 @SpringBootTest
 @AutoConfigureMockMvc
-@Import(TestcontainersConfiguration.class)
+@Import({TestcontainersConfiguration.class, KafkaTestcontainersConfiguration.class})
 class OrderApiIntegrationTest {
 
     @Autowired

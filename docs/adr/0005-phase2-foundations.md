@@ -36,8 +36,10 @@ gateway, and "Reactive Gateway" is the WebFlux one.
 
 ## Consequences
 - Module order in `services/pom.xml`: `common-events`, `common-messaging`, the three services, `api-gateway`.
-- Each service imports the messaging configuration, scans the shared outbox / processed-event entities, and enables
-  scheduling for the publisher.
+- Each service imports the messaging configuration and enables scheduling for the publisher.
+  *(Updated in step 2.2: the shared code reads and writes the `outbox` / `processed_events` tables with plain SQL,
+  Spring's `JdbcClient`, instead of shared JPA entities. The lock query and the consumers' "insert if not seen before"
+  are SQL anyway, and services then don't have to scan entities from another module.)*
 - Polling costs one small query per service about every 500 ms (served by the existing partial index
   `idx_outbox_unpublished`) and adds up to ~0.5 s of delivery delay — well inside the 30 s saga timeout.
 - At-least-once delivery means every consumer must be idempotent (proven by tests in step 2.3).

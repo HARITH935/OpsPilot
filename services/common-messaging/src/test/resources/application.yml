@@ -1,0 +1,4 @@
+spring:
+  sql:
+    init:
+      mode: always   # run schema.sql on the test Postgres too (by default only on in-memory databases)
