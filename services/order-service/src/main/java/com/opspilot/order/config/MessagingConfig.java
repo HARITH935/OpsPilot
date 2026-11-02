@@ -8,7 +8,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 // A separate class, not annotations on OrderServiceApplication: test slices like @WebMvcTest skip @Configuration
 // classes, so controller tests don't need Kafka or the outbox
 @Configuration(proxyBeanMethods = false)
-@EnableScheduling                       // runs @Scheduled methods, such as the outbox publisher (every 0.5 s)
+@EnableScheduling                       // runs @Scheduled methods: the outbox publisher (every 0.5 s), SagaTimeoutJob
 @Import(MessagingConfiguration.class)   // outbox writer + publisher from common-messaging
 class MessagingConfig {
 }

@@ -40,6 +40,7 @@ public class OrderService {
     private static final Logger log = LoggerFactory.getLogger(OrderService.class);
 
     static final String PAYMENT_FAILED = "PAYMENT_FAILED";   // cancel reason; the provider's own reason stays in payment
+    static final String TIMEOUT = "TIMEOUT";                 // cancel reason when the saga took too long (SagaTimeoutJob)
 
     private final OrderRepository orderRepository;
     private final OutboxWriter outbox;
@@ -102,6 +103,7 @@ public class OrderService {
     /**
      * StockRejected from inventory: the order can't be fulfilled, so it is cancelled with inventory's reason and
      * OrderCancelled is announced (via the outbox, same transaction). Handled once per event.
+     * Too late if the saga timeout cancelled the order first: then nothing changes.
      */
     public void onStockRejected(UUID eventId, StockRejected rejected) {
         transactions.executeWithoutResult(tx -> {
@@ -111,6 +113,11 @@ public class OrderService {
             }
             Order order = orderRepository.findById(rejected.orderId())
                     .orElseThrow(() -> new OrderNotFoundException(rejected.orderId()));
+            if (order.getStatus() == OrderStatus.CANCELLED) {
+                log.info("Order {} was already cancelled ({}), ignoring the late StockRejected",
+                        order.getId(), order.getCancelReason());
+                return;
+            }
             order.cancel(rejected.reason());
             outbox.write(new OrderCancelled(order.getId(), rejected.reason()));
             log.info("Order {} cancelled: {} is {}", order.getId(), rejected.sku(), rejected.reason());
@@ -120,6 +127,8 @@ public class OrderService {
     /**
      * PaymentCompleted from payment: the order is CONFIRMED and OrderConfirmed is announced (via the outbox, same
      * transaction). Handled once per event.
+     * Too late if the saga timeout cancelled the order first: the order stays cancelled, and the money taken for it
+     * must go back. Until refunds exist (step 2.6b) that is only logged, as a warning.
      */
     public void onPaymentCompleted(UUID eventId, PaymentCompleted completed) {
         transactions.executeWithoutResult(tx -> {
@@ -129,6 +138,11 @@ public class OrderService {
             }
             Order order = orderRepository.findById(completed.orderId())
                     .orElseThrow(() -> new OrderNotFoundException(completed.orderId()));
+            if (order.getStatus() == OrderStatus.CANCELLED) {
+                log.warn("Order {} was already cancelled ({}), but payment {} of {} completed: it needs a refund",
+                        order.getId(), order.getCancelReason(), completed.paymentId(), completed.amount());
+                return;
+            }
             order.confirm();
             outbox.write(new OrderConfirmed(order.getId()));
             log.info("Order {} confirmed: payment {} of {} completed", order.getId(), completed.paymentId(), completed.amount());
@@ -138,6 +152,7 @@ public class OrderService {
     /**
      * PaymentFailed from payment: the order is CANCELLED with reason PAYMENT_FAILED and OrderCancelled is announced.
      * Inventory releases the held stock on its own, when it reads the same PaymentFailed. Handled once per event.
+     * Too late if the saga timeout cancelled the order first: then nothing changes.
      */
     public void onPaymentFailed(UUID eventId, PaymentFailed failed) {
         transactions.executeWithoutResult(tx -> {
@@ -147,9 +162,33 @@ public class OrderService {
             }
             Order order = orderRepository.findById(failed.orderId())
                     .orElseThrow(() -> new OrderNotFoundException(failed.orderId()));
+            if (order.getStatus() == OrderStatus.CANCELLED) {
+                log.info("Order {} was already cancelled ({}), ignoring the late PaymentFailed",
+                        order.getId(), order.getCancelReason());
+                return;
+            }
             order.cancel(PAYMENT_FAILED);
             outbox.write(new OrderCancelled(order.getId(), PAYMENT_FAILED));
             log.info("Order {} cancelled: payment {} failed ({})", order.getId(), failed.paymentId(), failed.reason());
+        });
+    }
+
+    /**
+     * Called by SagaTimeoutJob for an order that has been PENDING too long: it is cancelled with reason TIMEOUT and
+     * OrderCancelled is announced, so inventory releases any stock it still holds. Returns false if the order was
+     * decided after the job found it. If someone else changes the order before this commits (a payment result,
+     * another copy of the job), the order's @Version makes this fail with OptimisticLockingFailureException.
+     */
+    public boolean cancelTimedOut(UUID orderId) {
+        return transactions.execute(tx -> {
+            Order order = orderRepository.findById(orderId).orElseThrow(() -> new OrderNotFoundException(orderId));
+            if (order.getStatus() != OrderStatus.PENDING) {
+                return false;
+            }
+            order.cancel(TIMEOUT);
+            outbox.write(new OrderCancelled(order.getId(), TIMEOUT));
+            log.info("Order {} cancelled: still PENDING since {} (saga timeout)", order.getId(), order.getCreatedAt());
+            return true;
         });
     }
 

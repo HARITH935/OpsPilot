@@ -2,7 +2,8 @@
 
 Product catalogue, stock, and stock reservations for the order saga. It reacts to `OrderCreated` from Kafka by
 reserving the stock and answering `StockReserved` / `StockRejected`, then to the payment result: commit the held stock
-(paid) or release it and answer `StockReleased` (not paid). Next (Phase 2): a Redis cache for product reads.
+(paid) or release it and answer `StockReleased` (not paid, or the order was cancelled, e.g. by the saga timeout).
+Next (Phase 2): a Redis cache for product reads.
 
 ## Run
 Needs the local Postgres from `deploy/docker` running (see its README).
@@ -55,14 +56,16 @@ A product: `{"sku":"SKU-1","name":"Mechanical Keyboard","price":89.99,"stock":50
 | out | `inventory.events` | `StockRejected` `{orderId, sku, reason}` | nothing held: `UNKNOWN_PRODUCT` / `OUT_OF_STOCK` |
 | in | `payments.events` | `PaymentCompleted` | commits the held stock (it leaves the warehouse); announces nothing |
 | in | `payments.events` | `PaymentFailed` | releases the held stock (the saga's **compensation**) and answers ↓ |
+| in | `orders.events` | `OrderCancelled` `{orderId, reason}` | any reason: releases whatever is still held and answers ↓. This frees the stock of an order the saga timeout cancelled; for the other reasons nothing is usually left to release |
 | out | `inventory.events` | `StockReleased` `{orderId}` | the units are on sale again (only sent if something was actually held) |
 
 `OrderEventsListener` (consumer group `inventory-service`) calls `ReservationService.reserveForOrder`, which does
 three things in **one transaction**: record the event id in `processed_events`, reserve, write the answer to the
 outbox. So a redelivered event is skipped ("already handled, skipping the duplicate"), and a stock conflict retries
 all three together. `PaymentEventsListener` (same group) works the same way through `onPaymentCompleted` /
-`onPaymentFailed`: duplicate mark + commit or release (+ `StockReleased`) in one transaction. Other events are
-ignored. A message that still fails after 3 retries (or that isn't a readable event) is moved to `<topic>.dlq` and
+`onPaymentFailed`, and `OrderEventsListener` through `onOrderCancelled`: duplicate mark + commit or release
+(+ `StockReleased`) in one transaction. Whichever of `PaymentFailed` / `OrderCancelled` comes first releases the
+stock; the other finds nothing held, so `StockReleased` is sent once. `OrderConfirmed` is ignored. A message that still fails after 3 retries (or that isn't a readable event) is moved to `<topic>.dlq` and
 logged as `Moving message ... to orders.events.dlq`; see [`common-messaging`](../common-messaging/README.md).
 ```bash
 docker exec -it opspilot-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
@@ -78,7 +81,7 @@ docker exec opspilot-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-s
 |---|---|---|
 | `reserve(orderId, items)` — via `reserveForOrder(eventId, OrderCreated)` | `OrderCreated` | **All or nothing:** every item held (`reserved += qty`) → `Reserved` with unit prices + total (inventory prices orders, [ADR 0004](../../docs/adr/0004-orders-priced-by-inventory.md)) · or nothing held → `Rejected` (`UNKNOWN_PRODUCT` / `OUT_OF_STOCK`) |
 | `commit(orderId)` — via `onPaymentCompleted(eventId, orderId)` | `PaymentCompleted` | The held units leave the warehouse: `stock -= qty`, `reserved -= qty` |
-| `release(orderId)` — via `onPaymentFailed(eventId, orderId)` | `PaymentFailed` (step 2.6: also a timed-out order) | The held units are on sale again: `reserved -= qty`; `StockReleased` is announced |
+| `release(orderId)` — via `onPaymentFailed` / `onOrderCancelled(eventId, orderId)` | `PaymentFailed`, `OrderCancelled` (e.g. saga timeout) | The held units are on sale again: `reserved -= qty`; `StockReleased` is announced |
 
 - Each reservation row moves once: `HELD` → `COMMITTED` or `HELD` → `RELEASED`. Repeating `commit` / `release` changes nothing (returns 0); reserving the same order twice is refused.
 - **Two orders, same product, same moment:** the product's `version` column (optimistic locking) makes the slower update fail instead of overwriting the other. Spring Framework 7's built-in `@Retryable` then runs the method again with fresh data: up to 5 retries, about 10 → 160 ms apart with random jitter. `RetryConfig` logs every failed attempt.

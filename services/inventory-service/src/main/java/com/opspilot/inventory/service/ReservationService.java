@@ -104,17 +104,16 @@ public class ReservationService {
      * Handled once per event, like onPaymentCompleted. Returns how many reservations changed.
      */
     public int onPaymentFailed(UUID eventId, UUID orderId) {
-        return transactions.execute(tx -> {
-            if (!processedEvents.markProcessed(eventId)) {
-                log.info("Event {} for order {} was already handled, skipping the duplicate", eventId, orderId);
-                return 0;
-            }
-            int released = settle(orderId, false);
-            if (released > 0) {
-                outbox.write(new StockReleased(orderId));
-            }
-            return released;
-        });
+        return releaseOnce(eventId, orderId);
+    }
+
+    /**
+     * An OrderCancelled event from Kafka, whatever the reason: anything still held for the order goes back on sale,
+     * exactly like onPaymentFailed. This is what frees the stock of an order the saga timeout cancelled. For the
+     * other reasons it usually finds nothing left to release (rejected, or already released on PaymentFailed).
+     */
+    public int onOrderCancelled(UUID eventId, UUID orderId) {
+        return releaseOnce(eventId, orderId);
     }
 
     /**
@@ -173,6 +172,21 @@ public class ReservationService {
 
         log.info("Reserved {} product(s) for order {}, total {}", reserved.size(), orderId, total);
         return new Reserved(orderId, List.copyOf(reserved), total);
+    }
+
+    // The duplicate mark, the release and StockReleased (only if something was held) share one transaction
+    private int releaseOnce(UUID eventId, UUID orderId) {
+        return transactions.execute(tx -> {
+            if (!processedEvents.markProcessed(eventId)) {
+                log.info("Event {} for order {} was already handled, skipping the duplicate", eventId, orderId);
+                return 0;
+            }
+            int released = settle(orderId, false);
+            if (released > 0) {
+                outbox.write(new StockReleased(orderId));
+            }
+            return released;
+        });
     }
 
     private int settle(UUID orderId, boolean paid) {
