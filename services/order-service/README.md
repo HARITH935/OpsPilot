@@ -55,11 +55,16 @@ The list endpoint returns summaries without items, so it never runs one extra qu
   `{"title":"Bad Request","status":400,"errors":{"items[0].qty":"must be greater than 0"}}`
 
 ## Events
-| Event | Topic | When | Key |
+| Direction | Topic | Event | When / what order-service does |
 |---|---|---|---|
-| `OrderCreated` `{orderId, customerId, items[sku, qty]}` | `orders.events` | a new order is placed (not on an idempotent replay) | order id |
+| out | `orders.events` | `OrderCreated` `{orderId, customerId, items[sku, qty]}` | a new order is placed (not on an idempotent replay) |
+| in | `inventory.events` | `StockReserved` `{orderId, items[sku, qty, unitPrice], totalAmount}` | copies the unit prices and total onto the order ([ADR 0004](../../docs/adr/0004-orders-priced-by-inventory.md)); it stays `PENDING` until the payment result |
+| in | `inventory.events` | `StockRejected` `{orderId, sku, reason}` | cancels the order with that reason (e.g. `OUT_OF_STOCK`) and announces ↓ |
+| out | `orders.events` | `OrderCancelled` `{orderId, reason}` | the order was cancelled |
 
-Written to the `outbox` table in the same transaction as the order, then sent by the outbox publisher from
+Every event is keyed by the order id. `InventoryEventsListener` (consumer group `order-service`) handles each
+inventory event once: the duplicate mark in `processed_events` is saved in the same transaction as the change.
+Outgoing events are written to the `outbox` table in the same transaction as the order, then sent by the outbox publisher from
 [`common-messaging`](../common-messaging/README.md) (usually within ~0.1 s; at-least-once). Watch them arrive:
 ```bash
 docker exec -it opspilot-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
@@ -93,5 +98,5 @@ Never edit a merged migration — add the next `V<n>__...sql`.
 
 ## Packages
 `controller` → `service` → `repository` → database. `dto` = API shapes, `model` = JPA entities,
-`event` = domain events (the outbox itself lives in `common-messaging`), `config` = Spring config
+`event` = the Kafka listener (`InventoryEventsListener`; the outbox itself lives in `common-messaging`), `config` = Spring config
 (`MessagingConfig` turns on the outbox publisher), `exception` = error handling.

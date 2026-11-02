@@ -1,6 +1,10 @@
 package com.opspilot.order.service;
 
+import com.opspilot.events.OrderCancelled;
 import com.opspilot.events.OrderCreated;
+import com.opspilot.events.StockRejected;
+import com.opspilot.events.StockReserved;
+import com.opspilot.messaging.consumer.ProcessedEvents;
 import com.opspilot.messaging.outbox.OutboxWriter;
 import com.opspilot.order.dto.CreateOrderRequest;
 import com.opspilot.order.dto.OrderItemRequest;
@@ -26,6 +30,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.transaction.support.TransactionOperations;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -37,9 +42,10 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-// Pure unit test: the repository and the outbox are Mockito mocks, so there is no Spring, database or Kafka
+// Pure unit test: the repository, the outbox and the duplicate check are Mockito mocks: no Spring, database or Kafka
 @ExtendWith(MockitoExtension.class)
 class OrderServiceTest {
 
@@ -53,12 +59,15 @@ class OrderServiceTest {
     @Mock
     private OutboxWriter outbox;
 
+    @Mock
+    private ProcessedEvents processedEvents;
+
     private OrderService orderService;
 
     @BeforeEach
     void setUp() {
         // withoutTransaction(): just runs the code — there is no database in this test
-        orderService = new OrderService(orderRepository, outbox, TransactionOperations.withoutTransaction());
+        orderService = new OrderService(orderRepository, outbox, processedEvents, TransactionOperations.withoutTransaction());
     }
 
     @Test
@@ -135,6 +144,49 @@ class OrderServiceTest {
         assertThat(result.orderId()).isEqualTo(winner.getId());
         assertThat(result.replayed()).isTrue();
         verify(outbox, never()).write(any());   // only the winner's order has an event
+    }
+
+    @Test
+    void stockReservedPricesTheOrder() {
+        UUID eventId = UUID.randomUUID();
+        Order order = new Order("c-1");
+        order.addItem("SKU-1", 2);
+        when(processedEvents.markProcessed(eventId)).thenReturn(true);
+        when(orderRepository.findWithItemsById(order.getId())).thenReturn(Optional.of(order));
+
+        orderService.onStockReserved(eventId, new StockReserved(order.getId(),
+                List.of(new StockReserved.Item("SKU-1", 2, new BigDecimal("89.99"))), new BigDecimal("179.98")));
+
+        assertThat(order.getTotalAmount()).isEqualTo(new BigDecimal("179.98"));
+        assertThat(order.getItems().get(0).getUnitPrice()).isEqualTo(new BigDecimal("89.99"));
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.PENDING);
+        verifyNoInteractions(outbox);   // nothing to announce yet: payment reacts to inventory's event directly
+    }
+
+    @Test
+    void stockRejectedCancelsTheOrderAndAnnouncesIt() {
+        UUID eventId = UUID.randomUUID();
+        Order order = new Order("c-1");
+        when(processedEvents.markProcessed(eventId)).thenReturn(true);
+        when(orderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+
+        orderService.onStockRejected(eventId, new StockRejected(order.getId(), "SKU-10", "OUT_OF_STOCK"));
+
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.CANCELLED);
+        assertThat(order.getCancelReason()).isEqualTo("OUT_OF_STOCK");
+        verify(outbox).write(new OrderCancelled(order.getId(), "OUT_OF_STOCK"));
+    }
+
+    @Test
+    void aDuplicateInventoryEventChangesNothing() {
+        UUID eventId = UUID.randomUUID();
+        UUID orderId = UUID.randomUUID();
+        when(processedEvents.markProcessed(eventId)).thenReturn(false);   // handled before
+
+        orderService.onStockRejected(eventId, new StockRejected(orderId, "SKU-10", "OUT_OF_STOCK"));
+        orderService.onStockReserved(eventId, new StockReserved(orderId, List.of(), BigDecimal.ONE));
+
+        verifyNoInteractions(orderRepository, outbox);
     }
 
     @Test

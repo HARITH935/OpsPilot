@@ -31,7 +31,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 // The provider is a mock here, so each test decides whether it fails; SimulatedPaymentProviderTest covers the real one.
 @SpringBootTest
 @AutoConfigureMockMvc
-@Import(TestcontainersConfiguration.class)
+@Import({TestcontainersConfiguration.class, KafkaTestcontainersConfiguration.class})
 class PaymentApiIntegrationTest {
 
     @Autowired
@@ -54,7 +54,7 @@ class PaymentApiIntegrationTest {
     @Test
     void chargedPaymentIsStoredAndCanBeReadOverHttp() throws Exception {
         UUID orderId = UUID.randomUUID();
-        PaymentResponse payment = paymentService.charge(orderId, new BigDecimal("209.97"));
+        PaymentResponse payment = paymentService.charge(UUID.randomUUID(), orderId, new BigDecimal("209.97"));
 
         mockMvc.perform(get("/api/payments/{id}", payment.id()))
                 .andExpect(status().isOk())
@@ -68,7 +68,7 @@ class PaymentApiIntegrationTest {
     void failedChargeIsStoredWithItsReason() throws Exception {
         doThrow(new PaymentProviderException("provider down")).when(paymentProvider).charge(any(), any());
 
-        paymentService.charge(UUID.randomUUID(), new BigDecimal("10.00"));
+        paymentService.charge(UUID.randomUUID(), UUID.randomUUID(), new BigDecimal("10.00"));
 
         mockMvc.perform(get("/api/payments").param("status", "FAILED"))
                 .andExpect(status().isOk())
@@ -81,8 +81,9 @@ class PaymentApiIntegrationTest {
         UUID orderId = UUID.randomUUID();
         BigDecimal amount = new BigDecimal("10.00");
 
-        PaymentResponse first = paymentService.charge(orderId, amount);
-        PaymentResponse second = paymentService.charge(orderId, amount);   // e.g. the same event delivered twice
+        UUID event = UUID.randomUUID();
+        PaymentResponse first = paymentService.charge(event, orderId, amount);
+        PaymentResponse second = paymentService.charge(event, orderId, amount);   // the same event delivered twice
 
         assertThat(second.id()).isEqualTo(first.id());
         verify(paymentProvider, times(1)).charge(orderId, amount);
@@ -91,9 +92,9 @@ class PaymentApiIntegrationTest {
 
     @Test
     void listShowsNewestFirst() throws Exception {
-        paymentService.charge(UUID.randomUUID(), new BigDecimal("10.00"));
-        paymentService.charge(UUID.randomUUID(), new BigDecimal("20.00"));
-        PaymentResponse newest = paymentService.charge(UUID.randomUUID(), new BigDecimal("30.00"));
+        paymentService.charge(UUID.randomUUID(), UUID.randomUUID(), new BigDecimal("10.00"));
+        paymentService.charge(UUID.randomUUID(), UUID.randomUUID(), new BigDecimal("20.00"));
+        PaymentResponse newest = paymentService.charge(UUID.randomUUID(), UUID.randomUUID(), new BigDecimal("30.00"));
 
         mockMvc.perform(get("/api/payments").param("size", "2"))
                 .andExpect(status().isOk())
