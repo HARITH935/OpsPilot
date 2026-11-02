@@ -1,8 +1,8 @@
 # inventory-service (:8083)
 
 Product catalogue, stock, and stock reservations for the order saga. It reacts to `OrderCreated` from Kafka by
-reserving the stock and answering `StockReserved` / `StockRejected`. Next (Phase 2): commit / release on the payment
-result, and a Redis cache for product reads.
+reserving the stock and answering `StockReserved` / `StockRejected`, then to the payment result: commit the held stock
+(paid) or release it and answer `StockReleased` (not paid). Next (Phase 2): a Redis cache for product reads.
 
 ## Run
 Needs the local Postgres from `deploy/docker` running (see its README).
@@ -13,7 +13,7 @@ export DB_PASSWORD=$(grep '^INVENTORY_DB_PASSWORD=' ../deploy/docker/.env | cut 
 ```
 On startup Flyway applies any new `db/migration/V*.sql` files (the very first start also loads 10 demo products),
 then Hibernate checks the entities match the tables. With Kafka running (also `deploy/docker`) it starts reading
-`orders.events` where it stopped last time (its very first start reads the topic from the beginning).
+`orders.events` and `payments.events` where it stopped last time (its very first start reads the topic from the beginning).
 
 ## Test
 ```bash
@@ -53,13 +53,17 @@ A product: `{"sku":"SKU-1","name":"Mechanical Keyboard","price":89.99,"stock":50
 | in | `orders.events` | `OrderCreated` | reserves the stock (all or nothing) and answers ↓ |
 | out | `inventory.events` | `StockReserved` `{orderId, items[sku, qty, unitPrice], totalAmount}` | stock held, order priced |
 | out | `inventory.events` | `StockRejected` `{orderId, sku, reason}` | nothing held: `UNKNOWN_PRODUCT` / `OUT_OF_STOCK` |
+| in | `payments.events` | `PaymentCompleted` | commits the held stock (it leaves the warehouse); announces nothing |
+| in | `payments.events` | `PaymentFailed` | releases the held stock (the saga's **compensation**) and answers ↓ |
+| out | `inventory.events` | `StockReleased` `{orderId}` | the units are on sale again (only sent if something was actually held) |
 
 `OrderEventsListener` (consumer group `inventory-service`) calls `ReservationService.reserveForOrder`, which does
 three things in **one transaction**: record the event id in `processed_events`, reserve, write the answer to the
 outbox. So a redelivered event is skipped ("already handled, skipping the duplicate"), and a stock conflict retries
-all three together. Other order events are ignored until step 2.5. A message that still fails after 3 retries (or
-that isn't a readable event) is moved to `orders.events.dlq` and logged as `Moving message ... to orders.events.dlq`;
-see [`common-messaging`](../common-messaging/README.md).
+all three together. `PaymentEventsListener` (same group) works the same way through `onPaymentCompleted` /
+`onPaymentFailed`: duplicate mark + commit or release (+ `StockReleased`) in one transaction. Other events are
+ignored. A message that still fails after 3 retries (or that isn't a readable event) is moved to `<topic>.dlq` and
+logged as `Moving message ... to orders.events.dlq`; see [`common-messaging`](../common-messaging/README.md).
 ```bash
 docker exec -it opspilot-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
   --topic inventory.events --from-beginning --formatter-property print.key=true
@@ -73,8 +77,8 @@ docker exec opspilot-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-s
 | Method | Called on (Phase 2) | Effect |
 |---|---|---|
 | `reserve(orderId, items)` — via `reserveForOrder(eventId, OrderCreated)` | `OrderCreated` | **All or nothing:** every item held (`reserved += qty`) → `Reserved` with unit prices + total (inventory prices orders, [ADR 0004](../../docs/adr/0004-orders-priced-by-inventory.md)) · or nothing held → `Rejected` (`UNKNOWN_PRODUCT` / `OUT_OF_STOCK`) |
-| `commit(orderId)` | `PaymentCompleted` | The held units leave the warehouse: `stock -= qty`, `reserved -= qty` |
-| `release(orderId)` | `PaymentFailed` (or the order is cancelled) | The held units are on sale again: `reserved -= qty` |
+| `commit(orderId)` — via `onPaymentCompleted(eventId, orderId)` | `PaymentCompleted` | The held units leave the warehouse: `stock -= qty`, `reserved -= qty` |
+| `release(orderId)` — via `onPaymentFailed(eventId, orderId)` | `PaymentFailed` (step 2.6: also a timed-out order) | The held units are on sale again: `reserved -= qty`; `StockReleased` is announced |
 
 - Each reservation row moves once: `HELD` → `COMMITTED` or `HELD` → `RELEASED`. Repeating `commit` / `release` changes nothing (returns 0); reserving the same order twice is refused.
 - **Two orders, same product, same moment:** the product's `version` column (optimistic locking) makes the slower update fail instead of overwriting the other. Spring Framework 7's built-in `@Retryable` then runs the method again with fresh data: up to 5 retries, about 10 → 160 ms apart with random jitter. `RetryConfig` logs every failed attempt.
@@ -108,5 +112,5 @@ Never edit a merged migration — add the next `V<n>__...sql`.
 
 ## Packages
 `controller` → `service` → `repository` → database. `dto` = API shapes, `model` = JPA entities,
-`event` = the Kafka listener (`OrderEventsListener`), `config` = Spring config (`MessagingConfig` turns on the outbox
+`event` = the Kafka listeners (`OrderEventsListener`, `PaymentEventsListener`), `config` = Spring config (`MessagingConfig` turns on the outbox
 and the listener's shared settings), `exception` = error handling.

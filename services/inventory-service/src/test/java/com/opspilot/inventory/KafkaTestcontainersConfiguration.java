@@ -27,6 +27,8 @@ public class KafkaTestcontainersConfiguration {
         return new KafkaAdmin.NewTopics(
                 TopicBuilder.name(Topics.ORDERS).partitions(3).replicas(1).build(),
                 TopicBuilder.name(Topics.ORDERS + ".dlq").partitions(3).replicas(1).build(),
-                TopicBuilder.name(Topics.INVENTORY).partitions(3).replicas(1).build());
+                TopicBuilder.name(Topics.INVENTORY).partitions(3).replicas(1).build(),
+                TopicBuilder.name(Topics.PAYMENTS).partitions(3).replicas(1).build(),
+                TopicBuilder.name(Topics.PAYMENTS + ".dlq").partitions(3).replicas(1).build());
     }
 }

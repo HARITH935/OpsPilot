@@ -47,8 +47,8 @@ A payment: `{"id":"…","orderId":"…","amount":24.99,"status":"FAILED","failur
 |---|---|---|---|
 | in | `inventory.events` | `StockReserved` `{orderId, items, totalAmount}` | charges exactly `totalAmount` (inventory prices orders, [ADR 0004](../../docs/adr/0004-orders-priced-by-inventory.md)) and answers ↓ |
 | in | `inventory.events` | `StockRejected` / `StockReleased` | nothing: there is no money to take |
-| out | `payments.events` | `PaymentCompleted` `{orderId, paymentId, amount}` | the provider took the money |
-| out | `payments.events` | `PaymentFailed` `{orderId, paymentId, amount, reason}` | the provider refused (`PROVIDER_ERROR`) |
+| out | `payments.events` | `PaymentCompleted` `{orderId, paymentId, amount}` | the provider took the money → order confirms, inventory commits the stock |
+| out | `payments.events` | `PaymentFailed` `{orderId, paymentId, amount, reason}` | the provider refused (`PROVIDER_ERROR`) → order cancels, inventory releases the stock |
 
 `InventoryEventsListener` (consumer group `payment-service`; order-service reads the same topic in its own group)
 calls `charge`. Failures are retried 3 times, then the message goes to `inventory.events.dlq` (see
