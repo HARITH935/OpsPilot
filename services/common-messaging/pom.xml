@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.opspilot</groupId>
+        <artifactId>opspilot-services</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <!-- A Spring library (a normal .jar, no app of its own): each service imports MessagingConfiguration from it.
+         So, like common-events, it has no spring-boot-maven-plugin. -->
+    <artifactId>common-messaging</artifactId>
+    <name>common-messaging</name>
+    <description>Transactional outbox (writer + Kafka publisher) shared by all services</description>
+
+    <dependencies>
+        <!-- The event envelope and its JSON format -->
+        <dependency>
+            <groupId>com.opspilot</groupId>
+            <artifactId>common-events</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- Spring Kafka, plus Spring Boot's Kafka setup: a ready KafkaTemplate built from the spring.kafka.* settings -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-kafka</artifactId>
+        </dependency>
+        <!-- JdbcClient + transactions: the outbox table is read and written with plain SQL -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+
+        <!-- Tests run against a real Postgres and a real Kafka in Docker (Testcontainers) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-kafka</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

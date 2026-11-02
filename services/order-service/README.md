@@ -11,13 +11,16 @@ export DB_PASSWORD=$(grep '^ORDERS_DB_PASSWORD=' ../deploy/docker/.env | cut -d=
 SERVER_PORT=18081 ./mvnw -pl order-service spring-boot:run   # if 8081 is busy
 ```
 On startup Flyway applies any new `db/migration/V*.sql` files, then Hibernate checks the entities match the tables.
+Kafka (also in `deploy/docker`) is needed for events to go out. Without it the service still accepts orders; their
+events wait in the outbox and are sent once Kafka is back.
 
 ## Test
 ```bash
 cd services
 ./mvnw -pl order-service verify
 ```
-Needs Docker running: repository and health tests start their own throwaway Postgres (Testcontainers).
+Needs Docker running: the tests start their own throwaway Postgres, and the full-app tests a throwaway Kafka too
+(Testcontainers), so they never touch the containers in `deploy/docker`.
 
 ## API
 | Method + path | Success | Errors |
@@ -51,6 +54,19 @@ The list endpoint returns summaries without items, so it never runs one extra qu
 - Errors use **RFC 9457 Problem Details** (`application/problem+json`). Validation errors list each bad field:
   `{"title":"Bad Request","status":400,"errors":{"items[0].qty":"must be greater than 0"}}`
 
+## Events
+| Event | Topic | When | Key |
+|---|---|---|---|
+| `OrderCreated` `{orderId, customerId, items[sku, qty]}` | `orders.events` | a new order is placed (not on an idempotent replay) | order id |
+
+Written to the `outbox` table in the same transaction as the order, then sent by the outbox publisher from
+[`common-messaging`](../common-messaging/README.md) (usually within ~0.1 s; at-least-once). Watch them arrive:
+```bash
+docker exec -it opspilot-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+  --topic orders.events --from-beginning --formatter-property print.key=true
+```
+Unsent events: `SELECT event_type, aggregate_id, created_at FROM outbox WHERE published_at IS NULL;`
+
 ## Operational endpoints
 | Path | Purpose |
 |---|---|
@@ -66,6 +82,7 @@ The list endpoint returns summaries without items, so it never runs one extra qu
 | `DB_URL` | `jdbc:postgresql://localhost:5432/orders` | JDBC URL of the orders database |
 | `DB_USERNAME` | `orders_user` | Database login |
 | `DB_PASSWORD` | — (required) | Database password |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka address (`kafka:19092` from inside Docker) |
 
 ## Database
 Migrations in `src/main/resources/db/migration/`:
@@ -76,4 +93,5 @@ Never edit a merged migration — add the next `V<n>__...sql`.
 
 ## Packages
 `controller` → `service` → `repository` → database. `dto` = API shapes, `model` = JPA entities,
-`event` = domain events / outbox, `config` = Spring config, `exception` = error handling.
+`event` = domain events (the outbox itself lives in `common-messaging`), `config` = Spring config
+(`MessagingConfig` turns on the outbox publisher), `exception` = error handling.

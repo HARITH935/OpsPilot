@@ -9,6 +9,8 @@ spring:
     open-in-view: false        # don't keep DB connections open while writing the HTTP response
     hibernate:
       ddl-auto: validate       # Flyway owns the schema; Hibernate only checks entities match it
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}   # Kafka from deploy/docker; the outbox publisher sends here
 
 server:
   port: ${SERVER_PORT:8081}   # env var SERVER_PORT, default 8081

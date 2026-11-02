@@ -1,5 +1,7 @@
 package com.opspilot.order.service;
 
+import com.opspilot.events.OrderCreated;
+import com.opspilot.messaging.outbox.OutboxWriter;
 import com.opspilot.order.dto.CreateOrderRequest;
 import com.opspilot.order.dto.OrderResponse;
 import com.opspilot.order.dto.OrderSummaryResponse;
@@ -28,10 +30,12 @@ public class OrderService {
     private static final Logger log = LoggerFactory.getLogger(OrderService.class);
 
     private final OrderRepository orderRepository;
+    private final OutboxWriter outbox;
     private final TransactionOperations transactions;
 
-    public OrderService(OrderRepository orderRepository, TransactionOperations transactions) {
+    public OrderService(OrderRepository orderRepository, OutboxWriter outbox, TransactionOperations transactions) {
         this.orderRepository = orderRepository;
+        this.outbox = outbox;
         this.transactions = transactions;   // Spring Boot provides a TransactionTemplate: "run this block in a transaction"
     }
 
@@ -81,6 +85,10 @@ public class OrderService {
         Order order = new Order(request.customerId(), idempotencyKey, fingerprint);
         request.items().forEach(item -> order.addItem(item.sku(), item.qty()));
         orderRepository.saveAndFlush(order);   // flush now, so a duplicate key fails here — inside the try/catch above
+        // Same transaction as the order (transactional outbox): both are saved, or neither. Inventory reacts to it.
+        outbox.write(new OrderCreated(order.getId(), order.getCustomerId(), order.getItems().stream()
+                .map(item -> new OrderCreated.Item(item.getSku(), item.getQty()))
+                .toList()));
 
         log.info("Order {} created for customer {} with {} item(s)",
                 order.getId(), order.getCustomerId(), order.getItems().size());
