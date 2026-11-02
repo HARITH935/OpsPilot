@@ -8,6 +8,6 @@ import org.springframework.context.annotation.Import;
 // No @EnableScheduling on purpose: the tests call the publisher themselves, so nothing runs in the background.
 @SpringBootConfiguration
 @EnableAutoConfiguration
-@Import(MessagingConfiguration.class)
+@Import({MessagingConfiguration.class, TestListener.class})
 class MessagingTestApplication {
 }

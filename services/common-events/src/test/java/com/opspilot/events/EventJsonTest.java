@@ -74,6 +74,23 @@ class EventJsonTest {
     }
 
     @Test
+    void moneyKeepsItsExactDigitsAndScale() {
+        // 12.50 must stay 12.50 (not 12.5), and long amounts must not lose digits on the way
+        BigDecimal price = new BigDecimal("12.50");
+        BigDecimal total = new BigDecimal("1234567890.10");
+        EventEnvelope original = EventEnvelope.of(
+                new StockReserved(ORDER, List.of(new StockReserved.Item("SKU-1", 1, price)), total), null);
+
+        String json = EventJson.write(original);
+        StockReserved read = (StockReserved) EventJson.read(json).payload();
+
+        assertThat(json).contains("\"unitPrice\":12.50", "\"totalAmount\":1234567890.10");
+        assertThat(read.items().get(0).unitPrice()).isEqualTo(price);   // equals() also compares the scale
+        assertThat(read.totalAmount()).isEqualTo(total);
+        assertThat(EventJson.write(EventJson.read(json))).isEqualTo(json);   // read + write gives the same text back
+    }
+
+    @Test
     void readsJsonWrittenByHand() {
         // What another service would put on Kafka: no Java object was involved in writing this
         String json = """

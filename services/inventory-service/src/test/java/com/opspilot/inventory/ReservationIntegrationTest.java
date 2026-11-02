@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 // The reservation flow against a real Postgres (Testcontainers): real transactions, real version checks, real retries
 @SpringBootTest
-@Import(TestcontainersConfiguration.class)
+@Import({TestcontainersConfiguration.class, KafkaTestcontainersConfiguration.class})
 class ReservationIntegrationTest {
 
     @Autowired

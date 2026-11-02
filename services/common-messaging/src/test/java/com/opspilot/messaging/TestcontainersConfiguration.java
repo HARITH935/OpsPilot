@@ -33,6 +33,9 @@ public class TestcontainersConfiguration {
         return new KafkaAdmin.NewTopics(
                 TopicBuilder.name(Topics.ORDERS).partitions(3).replicas(1).build(),
                 TopicBuilder.name(Topics.INVENTORY).partitions(3).replicas(1).build(),
-                TopicBuilder.name(Topics.PAYMENTS).partitions(3).replicas(1).build());
+                TopicBuilder.name(Topics.PAYMENTS).partitions(3).replicas(1).build(),
+                // Only for the dead-letter tests (TestListener)
+                TopicBuilder.name(TestListener.TOPIC).partitions(3).replicas(1).build(),
+                TopicBuilder.name(TestListener.TOPIC + ".dlq").partitions(3).replicas(1).build());
     }
 }

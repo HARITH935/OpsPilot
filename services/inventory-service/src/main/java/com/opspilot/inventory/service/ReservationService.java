@@ -1,5 +1,9 @@
 package com.opspilot.inventory.service;
 
+import com.opspilot.events.EventPayload;
+import com.opspilot.events.OrderCreated;
+import com.opspilot.events.StockRejected;
+import com.opspilot.events.StockReserved;
 import com.opspilot.inventory.model.Product;
 import com.opspilot.inventory.model.Reservation;
 import com.opspilot.inventory.model.ReservationStatus;
@@ -8,6 +12,8 @@ import com.opspilot.inventory.repository.ReservationRepository;
 import com.opspilot.inventory.service.ReservationResult.Reason;
 import com.opspilot.inventory.service.ReservationResult.Rejected;
 import com.opspilot.inventory.service.ReservationResult.Reserved;
+import com.opspilot.messaging.consumer.ProcessedEvents;
+import com.opspilot.messaging.outbox.OutboxWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -20,6 +26,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.function.Function;
@@ -27,7 +34,7 @@ import java.util.stream.Collectors;
 
 /**
  * Holds stock for orders while they are paid for, then commits it (paid) or releases it (not paid).
- * Called by the order saga's Kafka events from Phase 2.
+ * Called by the order saga's Kafka events (OrderEventsListener).
  *
  * <p>Two orders may change the same product at the same moment. The product's @Version makes the slower one fail
  * (OptimisticLockingFailureException) instead of overwriting the other. @Retryable then runs the whole method again,
@@ -42,13 +49,37 @@ public class ReservationService {
 
     private final ProductRepository productRepository;
     private final ReservationRepository reservationRepository;
+    private final ProcessedEvents processedEvents;
+    private final OutboxWriter outbox;
     private final TransactionOperations transactions;
 
     public ReservationService(ProductRepository productRepository, ReservationRepository reservationRepository,
-                              TransactionOperations transactions) {
+                              ProcessedEvents processedEvents, OutboxWriter outbox, TransactionOperations transactions) {
         this.productRepository = productRepository;
         this.reservationRepository = reservationRepository;
+        this.processedEvents = processedEvents;
+        this.outbox = outbox;
         this.transactions = transactions;
+    }
+
+    /**
+     * An OrderCreated event from Kafka, handled once per event id. The duplicate check, the reservation and the reply
+     * (StockReserved or StockRejected, via the outbox) share one transaction: all of it is saved, or none, and after a
+     * stock conflict @Retryable repeats all of it. Empty if this event was already handled.
+     */
+    public Optional<ReservationResult> reserveForOrder(UUID eventId, OrderCreated order) {
+        return Optional.ofNullable(transactions.execute(tx -> {
+            if (!processedEvents.markProcessed(eventId)) {
+                log.info("Event {} for order {} was already handled, skipping the duplicate", eventId, order.orderId());
+                return null;
+            }
+            List<RequestedItem> items = order.items().stream()
+                    .map(item -> new RequestedItem(item.sku(), item.qty()))
+                    .toList();
+            ReservationResult result = tryReserve(order.orderId(), items);
+            outbox.write(toEvent(result));   // the saga's next step: payment charges it, or order cancels it
+            return result;
+        }));
     }
 
     /**
@@ -136,6 +167,15 @@ public class ReservationService {
     private Map<String, Product> productsBySku(Collection<String> skus) {
         return productRepository.findAllById(skus).stream()
                 .collect(Collectors.toMap(Product::getSku, Function.identity()));
+    }
+
+    private static EventPayload toEvent(ReservationResult result) {
+        return switch (result) {
+            case Reserved reserved -> new StockReserved(reserved.orderId(), reserved.items().stream()
+                    .map(item -> new StockReserved.Item(item.sku(), item.qty(), item.unitPrice()))
+                    .toList(), reserved.totalAmount());
+            case Rejected rejected -> new StockRejected(rejected.orderId(), rejected.sku(), rejected.reason().name());
+        };
     }
 
     private static Rejected rejected(UUID orderId, String sku, Reason reason) {

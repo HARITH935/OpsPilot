@@ -35,7 +35,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 // The catalogue starts with the 10 demo products from the V2 seed migration.
 @SpringBootTest
 @AutoConfigureMockMvc
-@Import(TestcontainersConfiguration.class)
+@Import({TestcontainersConfiguration.class, KafkaTestcontainersConfiguration.class})
 class ProductApiIntegrationTest {
 
     @Autowired
