@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -44,9 +45,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 // Login and access rules, end to end: the whole gateway with the demo users switched on, in front of fake services.
 // The password is a test value, not a secret: the real one is only in deploy/docker/.env (never in Git).
+// The tests log in dozens of times from one address: the login rate limit (RateLimitIntegrationTest) is raised here.
 @SpringBootTest(properties = {"gateway.demo-users.enabled=true",
-        "gateway.demo-users.password=" + AuthIntegrationTest.PASSWORD})
+        "gateway.demo-users.password=" + AuthIntegrationTest.PASSWORD, "gateway.rate-limit.login.requests=1000"})
 @AutoConfigureMockMvc
+@Import(RedisTestcontainersConfiguration.class)   // the rate limiter needs a Redis
 class AuthIntegrationTest {
 
     static final String PASSWORD = "test-password-for-demo-users";

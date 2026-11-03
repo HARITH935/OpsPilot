@@ -5,6 +5,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfigureMetrics;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -15,6 +16,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 // a service being down is that service's problem (503 on its route), not a reason to restart the gateway.
 @SpringBootTest
 @AutoConfigureMockMvc
+@Import(RedisTestcontainersConfiguration.class)   // the rate limiter needs a Redis
 @AutoConfigureMetrics   // metrics export is off in tests by default; turn it on so /actuator/prometheus exists
 class HealthEndpointTest {
 

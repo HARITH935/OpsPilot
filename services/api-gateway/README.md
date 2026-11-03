@@ -4,12 +4,15 @@ The single front door. Clients call only port 8080, and the gateway passes each 
 the path (a **reverse proxy**), then returns that service's answer unchanged. Built on Spring Cloud Gateway (the
 Spring MVC version, [ADR 0005](../../docs/adr/0005-phase2-foundations.md)), with routes written in `application.yml`.
 It has no database and no Kafka. It also checks **who is calling**: it issues and verifies JWT login tokens and
-enforces the roles (step 2.8). Rate limiting (step 2.9) comes next. All of this is done once, here, instead of in
-every service.
+enforces the roles (step 2.8), and it limits **how often**: a sliding-window rate limiter in Redis (step 2.9).
+All of this is done once, here, instead of in every service.
 
 ## Run
+Needs the local Redis from `deploy/docker` for rate limiting (see its README); without it the gateway still works,
+unlimited (fail-open).
 ```bash
 cd services
+export REDIS_PASSWORD=$(grep '^REDIS_PASSWORD=' ../deploy/docker/.env | cut -d= -f2-)
 ./mvnw -pl api-gateway spring-boot:run                                          # starts on :8080
 ORDER_SERVICE_URL=http://localhost:18081 ./mvnw -pl api-gateway spring-boot:run   # order-service on 18081
 
@@ -25,8 +28,9 @@ affects its own route (503).
 cd services
 ./mvnw -pl api-gateway verify
 ```
-No Docker needed. The tests put small fake services (the HTTP server that comes with the JDK) on free local ports
-and point the routes at them.
+Needs Docker running: the full-gateway tests start their own throwaway Redis (Testcontainers), so they never touch
+the Redis in `deploy/docker`. In place of the services, they put small fake services (the HTTP server that comes with
+the JDK) on free local ports and point the routes at them.
 
 ## Routes
 | Path | Goes to | Set with |
@@ -110,6 +114,56 @@ curl -i -X POST localhost:8080/api/products -H "Authorization: Bearer $TOKEN" -H
 - No CSRF protection is needed yet: the token travels in a header, which another website can't make a browser add.
   Phase 12 moves it into a cookie, and that is looked at again then.
 
+## Rate limiting
+Every request to `/api/**` and `/auth/**` is counted against its caller's **budget**. Once the budget is used up, the
+answer is **429 Too Many Requests**, and the request never reaches a service.
+
+| Who | Counted by | Default budget, per route | Setting |
+|---|---|---|---|
+| a caller with a valid token | the token's `sub` (e.g. `demo:admin`) | **20** requests per 1 s | `RATE_LIMIT_USER_REQUESTS` |
+| a caller without a token | IP address | **10** requests per 1 s | `RATE_LIMIT_ANONYMOUS_REQUESTS` |
+| `POST /auth/token` (login) | IP address | **10** tries per **1 min** (password guessing) | `RATE_LIMIT_LOGIN_REQUESTS` |
+
+- Each route (`orders`, `products`, `payments`) has its own budget. Any other `/api/...` path shares one budget, `other`,
+  so a client can't escape the limit (or create endless metric labels) by inventing paths.
+- **Never limited:** `/actuator/**` (health checks, metrics) and `/.well-known/**` (the public key).
+- **Sliding window:** "at most 10 in any 1-second stretch", not "10 per calendar second". With fixed windows a client
+  could send 10 at 0.99 s and 10 more at 1.01 s. Each caller is a Redis sorted set holding the times of its counted
+  requests. One Lua script (`src/main/resources/ratelimit/sliding-window.lua`) drops the ones older than the window,
+  counts the rest, and adds the new request only if it fits.
+  - Redis runs a script **as one step**, so two requests at the same moment can't both take the last place. A test
+    sends 50 requests at the same moment against a limit of 20: exactly 20 get through.
+  - The time comes from Redis (`TIME`), so every copy of the gateway counts with the same clock.
+  - A refused request is not counted, and a key disappears one window after its last request.
+- **The IP address** is the address the connection comes from. `X-Forwarded-For` is believed only when the
+  connection comes from a proxy listed in `GATEWAY_TRUSTED_PROXIES` (addresses or CIDR ranges, comma-separated; none
+  by default, the Ingress in Phase 4). Then the rightmost address that isn't one of our proxies counts. Otherwise a
+  client could claim a new address with every request and get a fresh budget each time.
+
+Every limited answer carries the client's standing; a 429 also says when to come back:
+```
+HTTP/1.1 429
+X-RateLimit-Limit: 10            the budget
+X-RateLimit-Remaining: 0         left in the window
+X-RateLimit-Reset: 1             seconds until a place frees up
+Retry-After: 1                   (429 only) wait this many seconds
+{"title":"Too many requests","status":429,"detail":"At most 10 requests per 1 s here without logging in. Try again in 1 s.","instance":"/api/products/SKU-1"}
+```
+
+**Fail-open:** if Redis can't be reached, requests go through **unlimited** rather than failing. The shop keeps
+working, and the outage shows in three places:
+- the log: one WARN at most every 30 s, and an INFO when Redis is back
+- the metric `gateway_ratelimit_redis_errors_total`
+- the answers, which then carry no `X-RateLimit-*` headers
+
+Redis commands time out after 100 ms. While the connection is down, they are refused at once (`RedisConfig`): after
+a `docker stop`, 30 requests took 0.4 s with that setting and 4.1 s without it. Limiting comes back by itself once
+Redis does (4 s after `docker start` in the real run). Redis being down doesn't make the gateway unhealthy: its
+health check ignores Redis on purpose.
+
+**Metrics** (at `/actuator/prometheus`): `gateway_ratelimit_rejected_total{route,key_type}` (429s, by route and by
+`user` / `ip`), `gateway_ratelimit_redis_errors_total`.
+
 ## When a service doesn't answer
 The gateway's own errors use **RFC 9457 Problem Details** (`application/problem+json`), the same format as the services.
 
@@ -155,13 +209,24 @@ HTTP/2 on each request (`Upgrade: h2c`), which the services don't support. Reque
 | `JWT_PRIVATE_KEY_FILE` / `JWT_PUBLIC_KEY_FILE` | — | PEM files of the signing key pair (both or neither); neither = a temporary key |
 | `DEMO_USERS_ENABLED` | `false` | `true` turns on `POST /auth/token` for viewer / engineer / admin |
 | `DEMO_USERS_PASSWORD` | — | Their shared password, 12+ characters; required when enabled (`deploy/docker/.env` locally) |
+| `REDIS_HOST` / `REDIS_PORT` | `localhost` / `6379` | Where Redis is |
+| `REDIS_PASSWORD` | — (empty) | Redis password (`deploy/docker/.env` locally) |
+| `RATE_LIMIT_ENABLED` | `true` | `false` switches rate limiting off |
+| `RATE_LIMIT_USER_REQUESTS` | `20` | Requests per 1 s per user, per route |
+| `RATE_LIMIT_ANONYMOUS_REQUESTS` | `10` | Requests per 1 s per IP without a token, per route |
+| `RATE_LIMIT_LOGIN_REQUESTS` | `10` | Login tries per 1 min per IP |
+| `GATEWAY_TRUSTED_PROXIES` | — (none) | Proxies whose `X-Forwarded-For` is believed, e.g. `10.0.0.0/8` |
 
 ## Packages
 - `config`: `HttpClientConfig` (HTTP/1.1), `SecurityConfig` (the rules), `JwtConfig` (the key pair, the token encoder and
-  decoder), `JwtProperties` / `DemoUsersProperties` (the settings, checked at startup)
+  decoder), `RedisConfig` (fail fast while Redis is down, the Lua script), `JwtProperties` / `DemoUsersProperties` /
+  `RateLimitProperties` (the settings, checked at startup)
+- `filter`: `RateLimitFilter` (runs after Spring Security, before the routes: counts, adds the headers, answers 429)
 - `controller`: `AuthController` (`POST /auth/token`), `JwksController` (the public key)
-- `service`: `TokenService` (makes signed tokens), `DemoUsers` (the three demo logins)
+- `service`: `TokenService` (makes signed tokens), `DemoUsers` (the three demo logins), `SlidingWindowRateLimiter`
+  (runs the Lua script), `ClientIpResolver` (whose IP is it)
 - `dto`: `TokenRequest` / `TokenResponse`
-- `exception`: `GatewayExceptionHandler` (503 / 504, failed login), `SecurityProblemHandler` (401 / 403), all as Problem Details
+- `exception`: `GatewayExceptionHandler` (503 / 504, failed login), `SecurityProblemHandler` (401 / 403),
+  `ProblemResponses` (writes a Problem Details body from code that runs before Spring MVC)
 
 The routes are not code: they are in `src/main/resources/application.yml`.

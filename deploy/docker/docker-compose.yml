@@ -1,4 +1,4 @@
-# Local development stack. Run from the repo root:
+# Local development stack: PostgreSQL, Kafka, Redis. Run from the repo root:
 #   docker compose -f deploy/docker/docker-compose.yml up -d
 # Secrets come from deploy/docker/.env (copy .env.example; never commit .env).
 name: opspilot
@@ -92,6 +92,35 @@ services:
       - /var/lib/kafka/data
       - /etc/kafka/secrets
       - /mnt/shared/config
+
+  # Redis: the API gateway's rate-limit counters (step 2.9) and, from step 2.10, inventory's product cache.
+  # Nothing in it has to survive a restart, so it keeps everything in memory only (no files written).
+  redis:
+    image: redis:7.4.12-alpine   # exact version pinned, like the others
+    container_name: opspilot-redis
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in deploy/docker/.env}
+      REDISCLI_AUTH: ${REDIS_PASSWORD}   # lets redis-cli in this container log in (health check) without -a <password>
+    # $$ = a literal $ for Docker Compose, so the shell inside the container fills in the password
+    command:
+      - sh
+      - -c
+      - >-
+        exec redis-server --requirepass "$$REDIS_PASSWORD"
+        --maxmemory 64mb --maxmemory-policy allkeys-lru
+        --save "" --appendonly no
+    ports:
+      - "127.0.0.1:6379:6379"   # only this machine can connect (and a password is required anyway)
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 128M   # Redis is capped at 64 MB of data above; the rest is headroom
+    restart: unless-stopped
 
 volumes:
   pgdata:
