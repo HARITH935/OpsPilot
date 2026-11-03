@@ -16,6 +16,7 @@ import java.net.http.HttpTimeoutException;
  * Turns "the service behind this route could not be reached" into an RFC 9457 ProblemDetail
  * (application/problem+json), in the same format as the services' own errors. Without it the client gets a bare 500.
  * An error the service itself returns (a 404, a 422, ...) is not handled here: the gateway passes it on unchanged.
+ * Also a failed login. (401 / 403 for tokens and roles come from Spring Security: SecurityProblemHandler.)
  */
 @RestControllerAdvice
 public class GatewayExceptionHandler {
@@ -39,6 +40,14 @@ public class GatewayExceptionHandler {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE,
                 "The service behind " + request.getRequestURI() + " can't be reached right now");
         problem.setTitle("Service unavailable");
+        return problem;
+    }
+
+    // POST /auth/token with a wrong username or password
+    @ExceptionHandler(InvalidCredentialsException.class)
+    ProblemDetail handleInvalidCredentials(InvalidCredentialsException ex) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNAUTHORIZED, ex.getMessage());
+        problem.setTitle("Login failed");
         return problem;
     }
 

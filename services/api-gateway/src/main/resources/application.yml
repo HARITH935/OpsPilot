@@ -7,6 +7,9 @@ spring:
   mvc:
     problemdetails:
       enabled: true   # Spring's own errors (e.g. 404 for an unknown path) as RFC 9457 Problem Details, like the services
+  web:
+    resources:
+      add-mappings: false   # the gateway serves no static files: an unknown path is a plain 404, whatever the method
   http:
     clients:
       # The HTTP client the gateway uses to call the services. The same limits for every route for now;
@@ -35,6 +38,18 @@ spring:
 
 server:
   port: ${SERVER_PORT:8080}   # env var SERVER_PORT, default 8080
+
+gateway:
+  jwt:
+    issuer: ${JWT_ISSUER:opspilot-gateway}   # the "iss" claim; tokens from anyone else are refused
+    ttl: ${JWT_TTL:30m}                       # a token is valid for 30 minutes (architecture doc B2.4)
+    # PEM files of the RSA key pair that signs the tokens (in the cloud: a Kubernetes Secret mounted as files).
+    # Both empty = a temporary key made at startup: fine locally, but tokens stop working when the gateway restarts.
+    private-key-file: ${JWT_PRIVATE_KEY_FILE:}
+    public-key-file: ${JWT_PUBLIC_KEY_FILE:}
+  demo-users:
+    enabled: ${DEMO_USERS_ENABLED:false}   # viewer / engineer / admin via POST /auth/token: local + evals only
+    password: ${DEMO_USERS_PASSWORD:}      # required (12+ characters) when enabled; no default on purpose
 
 management:
   endpoints:
