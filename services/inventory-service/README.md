@@ -45,7 +45,7 @@ A product: `{"sku":"SKU-1","name":"Mechanical Keyboard","price":89.99,"stock":50
 - **price** greater than 0 with at most 2 decimals · **stock** 0 – 1,000,000.
 - **201 Created**, not 202 like orders: the product is complete once stored, nothing else runs afterwards.
 - **409** also when two requests create the same SKU at the same moment: the primary key lets exactly one win.
-- `POST` is meant for admins only. The API gateway enforces that from Phase 2 (step 4); this service has no login check.
+- `POST` is for admins only: the [API gateway](../api-gateway/README.md) lets it through only with an ADMIN token (step 2.8). This service itself has no login check, so in Kubernetes only the gateway can reach it (Phase 4).
 - Errors use **RFC 9457 Problem Details** (`application/problem+json`), the same format as order-service:
   `{"title":"Bad Request","status":400,"errors":{"price":"must be greater than 0"}}`
 

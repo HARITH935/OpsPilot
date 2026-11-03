@@ -64,14 +64,18 @@ DB_PASSWORD=$(grep '^INVENTORY_DB_PASSWORD=' deploy/docker/.env | cut -d= -f2) \
 DB_PASSWORD=$(grep '^PAYMENTS_DB_PASSWORD=' deploy/docker/.env | cut -d= -f2) \
   java -Xmx256m -jar services/payment-service/target/payment-service-0.0.1-SNAPSHOT.jar
 
-# 4. The front door on :8080 (tell it where order-service is if you moved it, e.g. ORDER_SERVICE_URL=http://localhost:18081)
-java -Xmx128m -jar services/api-gateway/target/api-gateway-0.0.1-SNAPSHOT.jar
+# 4. The front door on :8080 (tell it where order-service is if you moved it, e.g. ORDER_SERVICE_URL=http://localhost:18081),
+#    with the demo logins viewer / engineer / admin (their password is DEMO_USERS_PASSWORD in deploy/docker/.env)
+DEMO_USERS_ENABLED=true DEMO_USERS_PASSWORD=$(grep '^DEMO_USERS_PASSWORD=' deploy/docker/.env | cut -d= -f2-) \
+  java -Xmx128m -jar services/api-gateway/target/api-gateway-0.0.1-SNAPSHOT.jar
 ```
 `-Xmx256m` keeps each service small (about 700 MB for all three, plus about 150 MB for the gateway). If a port is
 taken, add `SERVER_PORT=<free port>` in front, e.g. `SERVER_PORT=18081` for order-service.
 
 **Use port 8080 for everything:** the [API gateway](services/api-gateway/README.md) sends `/api/orders/**`,
 `/api/products/**` and `/api/payments/**` to the right service. A stopped service answers 503 there, a too slow one 504.
+Reading and ordering are open to everyone. Adding a product needs an ADMIN token: log in with `POST /auth/token`,
+then send `Authorization: Bearer <token>` ([how](services/api-gateway/README.md#login-and-roles-jwt)).
 
 | Service | Port | Try it | Full API |
 |---|---|---|---|
