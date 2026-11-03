@@ -8,4 +8,7 @@ public interface PaymentProvider {
 
     // Takes the money, or throws PaymentProviderException if the provider fails
     void charge(UUID orderId, BigDecimal amount);
+
+    // Gives the money back, or throws PaymentProviderException if the provider fails
+    void refund(UUID orderId, BigDecimal amount);
 }

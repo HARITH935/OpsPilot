@@ -104,16 +104,20 @@ public class ReservationService {
      * Handled once per event, like onPaymentCompleted. Returns how many reservations changed.
      */
     public int onPaymentFailed(UUID eventId, UUID orderId) {
-        return releaseOnce(eventId, orderId);
+        return releaseOnce(eventId, orderId, false);   // a failed payment never committed anything
     }
 
     /**
-     * An OrderCancelled event from Kafka, whatever the reason: anything still held for the order goes back on sale,
-     * exactly like onPaymentFailed. This is what frees the stock of an order the saga timeout cancelled. For the
-     * other reasons it usually finds nothing left to release (rejected, or already released on PaymentFailed).
+     * An OrderCancelled event from Kafka, whatever the reason: everything the order took goes back on sale. Units
+     * still held are released, exactly like onPaymentFailed. This is what frees the stock of an order the saga
+     * timeout cancelled. For the other reasons it usually finds nothing left (rejected, or already released on
+     * PaymentFailed).
+     *
+     * <p>Units already committed are returned to stock too. That happens only when the order was paid after the
+     * timeout and that late PaymentCompleted got here first (it comes on another topic): ADR 0006.
      */
     public int onOrderCancelled(UUID eventId, UUID orderId) {
-        return releaseOnce(eventId, orderId);
+        return releaseOnce(eventId, orderId, true);
     }
 
     /**
@@ -174,19 +178,40 @@ public class ReservationService {
         return new Reserved(orderId, List.copyOf(reserved), total);
     }
 
-    // The duplicate mark, the release and StockReleased (only if something was held) share one transaction
-    private int releaseOnce(UUID eventId, UUID orderId) {
+    // The duplicate mark, the release and StockReleased (only if something changed) share one transaction
+    private int releaseOnce(UUID eventId, UUID orderId, boolean alsoReturnCommitted) {
         return transactions.execute(tx -> {
             if (!processedEvents.markProcessed(eventId)) {
                 log.info("Event {} for order {} was already handled, skipping the duplicate", eventId, orderId);
                 return 0;
             }
-            int released = settle(orderId, false);
-            if (released > 0) {
+            int changed = settle(orderId, false);
+            if (alsoReturnCommitted) {
+                changed += returnCommitted(orderId);
+            }
+            if (changed > 0) {
                 outbox.write(new StockReleased(orderId));
             }
-            return released;
+            return changed;
         });
+    }
+
+    // Units a late payment committed for an order that was cancelled after all: back into the warehouse
+    private int returnCommitted(UUID orderId) {
+        List<Reservation> committed = reservationRepository.findByOrderIdAndStatus(orderId, ReservationStatus.COMMITTED);
+        if (committed.isEmpty()) {
+            return 0;   // the usual case: a cancelled order was never paid
+        }
+
+        Map<String, Product> products = productsBySku(committed.stream().map(Reservation::getSku).toList());
+        for (Reservation reservation : committed) {
+            products.get(reservation.getSku()).restock(reservation.getQty());
+            reservation.markReturned();
+        }
+        productRepository.flush();   // same as in settle: a concurrent change fails here and is retried
+
+        log.info("Returned {} committed reservation(s) of cancelled order {} to stock", committed.size(), orderId);
+        return committed.size();
     }
 
     private int settle(UUID orderId, boolean paid) {

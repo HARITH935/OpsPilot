@@ -6,11 +6,13 @@ public enum EventType {
     ORDER_CREATED("OrderCreated", OrderCreated.class, Topics.ORDERS),
     ORDER_CONFIRMED("OrderConfirmed", OrderConfirmed.class, Topics.ORDERS),
     ORDER_CANCELLED("OrderCancelled", OrderCancelled.class, Topics.ORDERS),
+    REFUND_REQUESTED("RefundRequested", RefundRequested.class, Topics.ORDERS),
     STOCK_RESERVED("StockReserved", StockReserved.class, Topics.INVENTORY),
     STOCK_REJECTED("StockRejected", StockRejected.class, Topics.INVENTORY),
     STOCK_RELEASED("StockReleased", StockReleased.class, Topics.INVENTORY),
     PAYMENT_COMPLETED("PaymentCompleted", PaymentCompleted.class, Topics.PAYMENTS),
-    PAYMENT_FAILED("PaymentFailed", PaymentFailed.class, Topics.PAYMENTS);
+    PAYMENT_FAILED("PaymentFailed", PaymentFailed.class, Topics.PAYMENTS),
+    PAYMENT_REFUNDED("PaymentRefunded", PaymentRefunded.class, Topics.PAYMENTS);
 
     private final String wireName;   // the "eventType" value in the JSON; never rename it, consumers rely on it
     private final Class<? extends EventPayload> payloadType;

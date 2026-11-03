@@ -5,6 +5,7 @@ import com.opspilot.events.OrderConfirmed;
 import com.opspilot.events.OrderCreated;
 import com.opspilot.events.PaymentCompleted;
 import com.opspilot.events.PaymentFailed;
+import com.opspilot.events.RefundRequested;
 import com.opspilot.events.StockRejected;
 import com.opspilot.events.StockReserved;
 import com.opspilot.messaging.consumer.ProcessedEvents;
@@ -46,6 +47,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 // Pure unit test: the repository, the outbox and the duplicate check are Mockito mocks: no Spring, database or Kafka
@@ -270,19 +272,21 @@ class OrderServiceTest {
     }
 
     @Test
-    void aPaymentCompletedAfterTheTimeoutChangesNothing() {   // logged as a warning: the money must be refunded
+    void aPaymentCompletedAfterTheTimeoutAsksForARefund() {
         UUID eventId = UUID.randomUUID();
+        UUID paymentId = UUID.randomUUID();
         Order order = new Order("c-1");
         order.cancel("TIMEOUT");
         when(processedEvents.markProcessed(eventId)).thenReturn(true);
         when(orderRepository.findById(order.getId())).thenReturn(Optional.of(order));
 
         // No exception: so no retries and no dead-letter topic for an event that can never be applied
-        orderService.onPaymentCompleted(eventId, new PaymentCompleted(order.getId(), UUID.randomUUID(), BigDecimal.TEN));
+        orderService.onPaymentCompleted(eventId, new PaymentCompleted(order.getId(), paymentId, BigDecimal.TEN));
 
-        assertThat(order.getStatus()).isEqualTo(OrderStatus.CANCELLED);
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.CANCELLED);   // stays cancelled, not confirmed
         assertThat(order.getCancelReason()).isEqualTo("TIMEOUT");
-        verifyNoInteractions(outbox);
+        verify(outbox).write(new RefundRequested(order.getId(), paymentId));   // the money goes back
+        verifyNoMoreInteractions(outbox);   // and no OrderConfirmed
     }
 
     @Test

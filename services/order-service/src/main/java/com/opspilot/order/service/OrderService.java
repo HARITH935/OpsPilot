@@ -5,6 +5,7 @@ import com.opspilot.events.OrderConfirmed;
 import com.opspilot.events.OrderCreated;
 import com.opspilot.events.PaymentCompleted;
 import com.opspilot.events.PaymentFailed;
+import com.opspilot.events.RefundRequested;
 import com.opspilot.events.StockRejected;
 import com.opspilot.events.StockReserved;
 import com.opspilot.messaging.consumer.ProcessedEvents;
@@ -128,7 +129,7 @@ public class OrderService {
      * PaymentCompleted from payment: the order is CONFIRMED and OrderConfirmed is announced (via the outbox, same
      * transaction). Handled once per event.
      * Too late if the saga timeout cancelled the order first: the order stays cancelled, and the money taken for it
-     * must go back. Until refunds exist (step 2.6b) that is only logged, as a warning.
+     * must go back, so RefundRequested is announced instead (same transaction; payment refunds it, ADR 0006).
      */
     public void onPaymentCompleted(UUID eventId, PaymentCompleted completed) {
         transactions.executeWithoutResult(tx -> {
@@ -139,7 +140,8 @@ public class OrderService {
             Order order = orderRepository.findById(completed.orderId())
                     .orElseThrow(() -> new OrderNotFoundException(completed.orderId()));
             if (order.getStatus() == OrderStatus.CANCELLED) {
-                log.warn("Order {} was already cancelled ({}), but payment {} of {} completed: it needs a refund",
+                outbox.write(new RefundRequested(order.getId(), completed.paymentId()));
+                log.warn("Order {} was already cancelled ({}), but payment {} of {} completed: asking for a refund",
                         order.getId(), order.getCancelReason(), completed.paymentId(), completed.amount());
                 return;
             }

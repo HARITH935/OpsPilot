@@ -25,6 +25,8 @@ public class KafkaTestcontainersConfiguration {
     @Bean
     KafkaAdmin.NewTopics paymentTopics() {
         return new KafkaAdmin.NewTopics(
+                TopicBuilder.name(Topics.ORDERS).partitions(3).replicas(1).build(),   // refund requests (ADR 0006)
+                TopicBuilder.name(Topics.ORDERS + ".dlq").partitions(3).replicas(1).build(),
                 TopicBuilder.name(Topics.INVENTORY).partitions(3).replicas(1).build(),
                 TopicBuilder.name(Topics.INVENTORY + ".dlq").partitions(3).replicas(1).build(),
                 TopicBuilder.name(Topics.PAYMENTS).partitions(3).replicas(1).build());

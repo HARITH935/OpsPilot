@@ -4,6 +4,7 @@ import com.opspilot.events.EventEnvelope;
 import com.opspilot.events.EventJson;
 import com.opspilot.events.OrderCancelled;
 import com.opspilot.events.OrderCreated;
+import com.opspilot.events.PaymentCompleted;
 import com.opspilot.events.StockRejected;
 import com.opspilot.events.StockReleased;
 import com.opspilot.events.StockReserved;
@@ -34,7 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 // Inventory's saga step, end to end: OrderCreated on orders.events -> listener -> reservation + outbox -> publisher
-// -> StockReserved / StockRejected on inventory.events; OrderCancelled -> release -> StockReleased.
+// -> StockReserved / StockRejected on inventory.events; OrderCancelled -> release (or return) -> StockReleased.
 // Kafka and Postgres are real (Testcontainers).
 @SpringBootTest
 @Import({TestcontainersConfiguration.class, KafkaTestcontainersConfiguration.class})
@@ -108,6 +109,29 @@ class OrderEventsIntegrationTest {
         assertThat(replies(order).get(1)).isEqualTo(new StockReleased(order));
         assertThat(reservedUnits(sku)).isZero();   // back on sale
         assertThat(reservationStatus(order)).isEqualTo("RELEASED");
+    }
+
+    @Test
+    void orderCancelledAfterALatePaymentReturnsTheCommittedStock() throws Exception {   // ADR 0006
+        String sku = newProduct("15.00", 10);
+        UUID order = UUID.randomUUID();
+        send(orderCreated(order, sku, 2));
+        awaitReply(order);   // StockReserved: 2 units held
+
+        // The order was paid only after the saga timeout, and that PaymentCompleted got here before the OrderCancelled
+        kafka.send(Topics.PAYMENTS, order.toString(), EventJson.write(EventEnvelope.of(
+                new PaymentCompleted(order, UUID.randomUUID(), new BigDecimal("30.00")), null))).get();
+        await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofMillis(200))
+                .until(() -> "COMMITTED".equals(reservationStatus(order)));
+        assertThat(stock(sku)).isEqualTo(8);   // the 2 units left the warehouse
+
+        send(orderCancelled(order, "TIMEOUT"));
+
+        await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofMillis(500)).until(() -> replies(order).size() == 2);
+        assertThat(replies(order).get(1)).isEqualTo(new StockReleased(order));
+        assertThat(reservationStatus(order)).isEqualTo("RETURNED");
+        assertThat(stock(sku)).isEqualTo(10);   // back in the warehouse...
+        assertThat(reservedUnits(sku)).isZero();   // ...and on sale
     }
 
     @Test
@@ -191,6 +215,10 @@ class OrderEventsIntegrationTest {
 
     private int reservedUnits(String sku) {
         return productRepository.findById(sku).orElseThrow().getReserved();
+    }
+
+    private int stock(String sku) {
+        return productRepository.findById(sku).orElseThrow().getStock();
     }
 
     private String reservationStatus(UUID order) {

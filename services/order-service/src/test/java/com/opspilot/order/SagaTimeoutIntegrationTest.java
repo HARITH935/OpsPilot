@@ -4,6 +4,8 @@ import com.jayway.jsonpath.JsonPath;
 import com.opspilot.events.EventEnvelope;
 import com.opspilot.events.EventJson;
 import com.opspilot.events.PaymentCompleted;
+import com.opspilot.events.PaymentRefunded;
+import com.opspilot.events.RefundRequested;
 import com.opspilot.events.Topics;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.AdminClientConfig;
@@ -69,18 +71,27 @@ class SagaTimeoutIntegrationTest {
     }
 
     @Test
-    void aPaymentThatArrivesAfterTheTimeoutChangesNothing() throws Exception {
+    void aPaymentThatArrivesAfterTheTimeoutIsSentBackForARefund() throws Exception {
         UUID order = placeOrder();
+        UUID payment = UUID.randomUUID();
         awaitOrder(order, "$.cancelReason", "TIMEOUT");
 
         awaitConsumed(send(Topics.PAYMENTS,
-                EventEnvelope.of(new PaymentCompleted(order, UUID.randomUUID(), new BigDecimal("179.98")), null)));
+                EventEnvelope.of(new PaymentCompleted(order, payment, new BigDecimal("179.98")), null)));
 
         mockMvc.perform(get("/api/orders/{id}", order))
                 .andExpect(jsonPath("$.status").value("CANCELLED"))
                 .andExpect(jsonPath("$.cancelReason").value("TIMEOUT"));
-        assertThat(orderEvents(order)).containsExactly("OrderCreated", "OrderCancelled");   // no OrderConfirmed
-        assertThat(deadLetters(Topics.PAYMENTS, order)).isEmpty();   // skipped with a warning, not failed and parked
+        // No OrderConfirmed: a refund request for exactly that payment instead (ADR 0006)
+        assertThat(awaitOrderEvents(order, 3)).containsExactly("OrderCreated", "OrderCancelled", "RefundRequested");
+        assertThat(lastOrderEvent(order)).isEqualTo(new RefundRequested(order, payment));
+        assertThat(deadLetters(Topics.PAYMENTS, order)).isEmpty();   // handled, not failed and parked
+
+        // payment-service's answer: order-service has nothing to do, and must not choke on the new event either
+        awaitConsumed(send(Topics.PAYMENTS,
+                EventEnvelope.of(new PaymentRefunded(order, payment, new BigDecimal("179.98")), null)));
+        assertThat(orderEvents(order)).hasSize(3);
+        assertThat(deadLetters(Topics.PAYMENTS, order)).isEmpty();
     }
 
     private UUID placeOrder() throws Exception {
@@ -113,6 +124,13 @@ class SagaTimeoutIntegrationTest {
                 .filter(message -> order.toString().equals(message.key()))
                 .map(message -> EventJson.read(message.value()).eventType())
                 .toList();
+    }
+
+    private Object lastOrderEvent(UUID order) {
+        return TopicReader.readAll(connection.getBootstrapServers(), Topics.ORDERS).stream()
+                .filter(message -> order.toString().equals(message.key()))
+                .map(message -> (Object) EventJson.read(message.value()).payload())
+                .toList().getLast();
     }
 
     private List<ConsumerRecord<String, String>> deadLetters(String topic, UUID order) {

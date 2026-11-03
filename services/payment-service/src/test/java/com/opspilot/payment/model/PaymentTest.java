@@ -38,6 +38,29 @@ class PaymentTest {
     }
 
     @Test
+    void completedPaymentCanBeRefundedOnce() {
+        Payment payment = Payment.completed(ORDER, AMOUNT);
+
+        payment.refund();
+
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.REFUNDED);
+        assertThat(payment.getRefundedAt()).isNotNull();
+        assertThatThrownBy(payment::refund)   // the money can only go back once
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("is REFUNDED");
+    }
+
+    @Test
+    void failedPaymentCannotBeRefunded() {
+        Payment payment = Payment.failed(ORDER, AMOUNT, "PROVIDER_ERROR");
+
+        assertThatThrownBy(payment::refund)   // no money was taken, so there is nothing to give back
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("is FAILED");
+        assertThat(payment.getRefundedAt()).isNull();
+    }
+
+    @Test
     void amountMustBeGreaterThanZero() {
         assertThatThrownBy(() -> Payment.completed(ORDER, BigDecimal.ZERO))
                 .isInstanceOf(IllegalArgumentException.class)

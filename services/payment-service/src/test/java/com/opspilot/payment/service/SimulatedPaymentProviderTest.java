@@ -10,6 +10,8 @@ import java.util.Random;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 // The failure-rate test: does the simulated provider fail exactly as often as configured? No Spring, no database.
 class SimulatedPaymentProviderTest {
@@ -50,6 +52,30 @@ class SimulatedPaymentProviderTest {
 
         long start = System.nanoTime();
         provider.charge(ORDER, AMOUNT);
+        Duration took = Duration.ofNanos(System.nanoTime() - start);
+
+        assertThat(took).isGreaterThanOrEqualTo(Duration.ofMillis(50));
+    }
+
+    @Test
+    void refundsFailAtTheSameRateAsCharges() {
+        assertThatThrownBy(() -> provider(1.0, Duration.ZERO).refund(ORDER, AMOUNT))
+                .isInstanceOf(PaymentProviderException.class)
+                .hasMessageContaining("refunding order " + ORDER);
+        assertThatCode(() -> provider(0.0, Duration.ZERO).refund(ORDER, AMOUNT)).doesNotThrowAnyException();
+        // The same rule as a charge: it fails exactly when the random number is below the rate
+        assertThatThrownBy(() -> new SimulatedPaymentProvider(properties(0.3, Duration.ZERO), () -> 0.29)
+                .refund(ORDER, AMOUNT)).isInstanceOf(PaymentProviderException.class);
+        assertThatCode(() -> new SimulatedPaymentProvider(properties(0.3, Duration.ZERO), () -> 0.30)
+                .refund(ORDER, AMOUNT)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void everyRefundTakesTheConfiguredLatency() {
+        SimulatedPaymentProvider provider = provider(0.0, Duration.ofMillis(50));
+
+        long start = System.nanoTime();
+        provider.refund(ORDER, AMOUNT);
         Duration took = Duration.ofNanos(System.nanoTime() - start);
 
         assertThat(took).isGreaterThanOrEqualTo(Duration.ofMillis(50));

@@ -57,6 +57,15 @@ public class Reservation {
         this.status = ReservationStatus.RELEASED;
     }
 
+    // The order was paid, but only after the saga timeout had cancelled it (ADR 0006): its units come back
+    public void markReturned() {
+        if (status != ReservationStatus.COMMITTED) {
+            throw new IllegalStateException("Reservation of " + sku + " for order " + orderId + " is " + status
+                    + ", only a COMMITTED one can be returned");
+        }
+        this.status = ReservationStatus.RETURNED;
+    }
+
     // A reservation is settled exactly once: HELD → COMMITTED or HELD → RELEASED
     private void requireHeld() {
         if (status != ReservationStatus.HELD) {

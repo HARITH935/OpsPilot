@@ -271,6 +271,39 @@ class ReservationServiceTest {
     }
 
     @Test
+    void orderCancelledAlsoReturnsStockALatePaymentAlreadyCommitted() {   // ADR 0006
+        UUID eventId = UUID.randomUUID();
+        Product keyboard = product("SKU-1", "89.99", 10);
+        keyboard.reserve(3);
+        keyboard.commit(3);   // the late PaymentCompleted got here first: 3 units left the warehouse
+        Reservation reservation = new Reservation(ORDER, "SKU-1", 3);
+        reservation.commit();
+        when(processedEvents.markProcessed(eventId)).thenReturn(true);
+        when(reservationRepository.findByOrderIdAndStatus(ORDER, ReservationStatus.HELD)).thenReturn(List.of());
+        when(reservationRepository.findByOrderIdAndStatus(ORDER, ReservationStatus.COMMITTED))
+                .thenReturn(List.of(reservation));
+        when(productRepository.findAllById(any())).thenReturn(List.of(keyboard));
+
+        assertThat(reservationService.onOrderCancelled(eventId, ORDER)).isEqualTo(1);
+
+        assertThat(keyboard.getStock()).isEqualTo(10);   // back in the warehouse...
+        assertThat(keyboard.getAvailable()).isEqualTo(10);   // ...and on sale
+        assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.RETURNED);
+        verify(outbox).write(new StockReleased(ORDER));
+    }
+
+    @Test
+    void paymentFailedNeverLooksForCommittedStock() {   // a failed payment can't have committed anything
+        UUID eventId = UUID.randomUUID();
+        when(processedEvents.markProcessed(eventId)).thenReturn(true);
+        when(reservationRepository.findByOrderIdAndStatus(ORDER, ReservationStatus.HELD)).thenReturn(List.of());
+
+        reservationService.onPaymentFailed(eventId, ORDER);
+
+        verify(reservationRepository, never()).findByOrderIdAndStatus(ORDER, ReservationStatus.COMMITTED);
+    }
+
+    @Test
     void orderCancelledWithNothingHeldAnnouncesNothing() {
         UUID eventId = UUID.randomUUID();
         when(processedEvents.markProcessed(eventId)).thenReturn(true);

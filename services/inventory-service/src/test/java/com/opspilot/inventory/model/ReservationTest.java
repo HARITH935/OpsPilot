@@ -30,6 +30,23 @@ class ReservationTest {
     }
 
     @Test
+    void onlyACommittedReservationCanBeReturned() {
+        Reservation paidLate = new Reservation(ORDER, "SKU-1", 2);
+        paidLate.commit();
+        Reservation released = new Reservation(ORDER, "SKU-2", 1);
+        released.release();
+
+        paidLate.markReturned();
+
+        assertThat(paidLate.getStatus()).isEqualTo(ReservationStatus.RETURNED);
+        assertThatThrownBy(released::markReturned)   // released units never left the warehouse
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("is RELEASED");
+        assertThatThrownBy(new Reservation(ORDER, "SKU-3", 1)::markReturned)   // nor did held ones
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
     void settledReservationCannotChangeAgain() {
         Reservation reservation = new Reservation(ORDER, "SKU-1", 2);
         reservation.commit();

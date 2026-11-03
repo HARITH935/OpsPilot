@@ -14,12 +14,13 @@ public record PaymentResponse(
         BigDecimal amount,
         PaymentStatus status,
         String failureReason,   // null unless status is FAILED
-        Instant createdAt
+        Instant createdAt,
+        Instant refundedAt      // null unless status is REFUNDED
 ) {
 
     public static PaymentResponse from(Payment payment) {
         return new PaymentResponse(
                 payment.getId(), payment.getOrderId(), payment.getAmount(),
-                payment.getStatus(), payment.getFailureReason(), payment.getCreatedAt());
+                payment.getStatus(), payment.getFailureReason(), payment.getCreatedAt(), payment.getRefundedAt());
     }
 }

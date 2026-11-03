@@ -3,6 +3,7 @@
 Product catalogue, stock, and stock reservations for the order saga. It reacts to `OrderCreated` from Kafka by
 reserving the stock and answering `StockReserved` / `StockRejected`, then to the payment result: commit the held stock
 (paid) or release it and answer `StockReleased` (not paid, or the order was cancelled, e.g. by the saga timeout).
+If an order is paid only after the timeout cancelled it, the stock that payment committed comes back too ([ADR 0006](../../docs/adr/0006-refund-late-payments.md)).
 Next (Phase 2): a Redis cache for product reads.
 
 ## Run
@@ -56,8 +57,9 @@ A product: `{"sku":"SKU-1","name":"Mechanical Keyboard","price":89.99,"stock":50
 | out | `inventory.events` | `StockRejected` `{orderId, sku, reason}` | nothing held: `UNKNOWN_PRODUCT` / `OUT_OF_STOCK` |
 | in | `payments.events` | `PaymentCompleted` | commits the held stock (it leaves the warehouse); announces nothing |
 | in | `payments.events` | `PaymentFailed` | releases the held stock (the saga's **compensation**) and answers ↓ |
-| in | `orders.events` | `OrderCancelled` `{orderId, reason}` | any reason: releases whatever is still held and answers ↓. This frees the stock of an order the saga timeout cancelled; for the other reasons nothing is usually left to release |
-| out | `inventory.events` | `StockReleased` `{orderId}` | the units are on sale again (only sent if something was actually held) |
+| in | `orders.events` | `OrderCancelled` `{orderId, reason}` | any reason: releases whatever is still held, returns whatever a late payment already committed, and answers ↓. This frees the stock of an order the saga timeout cancelled; for the other reasons nothing is usually left |
+| out | `inventory.events` | `StockReleased` `{orderId}` | the units are on sale again (only sent if something actually changed) |
+| in | `orders.events` / `payments.events` | `OrderConfirmed`, `RefundRequested` / `PaymentRefunded` | nothing: the stock was already settled |
 
 `OrderEventsListener` (consumer group `inventory-service`) calls `ReservationService.reserveForOrder`, which does
 three things in **one transaction**: record the event id in `processed_events`, reserve, write the answer to the
@@ -65,7 +67,12 @@ outbox. So a redelivered event is skipped ("already handled, skipping the duplic
 all three together. `PaymentEventsListener` (same group) works the same way through `onPaymentCompleted` /
 `onPaymentFailed`, and `OrderEventsListener` through `onOrderCancelled`: duplicate mark + commit or release
 (+ `StockReleased`) in one transaction. Whichever of `PaymentFailed` / `OrderCancelled` comes first releases the
-stock; the other finds nothing held, so `StockReleased` is sent once. `OrderConfirmed` is ignored. A message that still fails after 3 retries (or that isn't a readable event) is moved to `<topic>.dlq` and
+stock; the other finds nothing held, so `StockReleased` is sent once.
+**A payment that came after the saga timeout** reaches inventory on a different topic from the order's
+`OrderCancelled`, so either can come first. Cancel first: the stock is released, and the late `PaymentCompleted` then
+finds nothing held. Payment first: the stock is committed (it leaves the warehouse), and `OrderCancelled` then puts it
+back (`stock += qty`, reservation `RETURNED`). Both ways the units end up on sale again.
+A message that still fails after 3 retries (or that isn't a readable event) is moved to `<topic>.dlq` and
 logged as `Moving message ... to orders.events.dlq`; see [`common-messaging`](../common-messaging/README.md).
 ```bash
 docker exec -it opspilot-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
@@ -82,8 +89,9 @@ docker exec opspilot-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-s
 | `reserve(orderId, items)` — via `reserveForOrder(eventId, OrderCreated)` | `OrderCreated` | **All or nothing:** every item held (`reserved += qty`) → `Reserved` with unit prices + total (inventory prices orders, [ADR 0004](../../docs/adr/0004-orders-priced-by-inventory.md)) · or nothing held → `Rejected` (`UNKNOWN_PRODUCT` / `OUT_OF_STOCK`) |
 | `commit(orderId)` — via `onPaymentCompleted(eventId, orderId)` | `PaymentCompleted` | The held units leave the warehouse: `stock -= qty`, `reserved -= qty` |
 | `release(orderId)` — via `onPaymentFailed` / `onOrderCancelled(eventId, orderId)` | `PaymentFailed`, `OrderCancelled` (e.g. saga timeout) | The held units are on sale again: `reserved -= qty`; `StockReleased` is announced |
+| via `onOrderCancelled(eventId, orderId)` only | `OrderCancelled` after a late `PaymentCompleted` | The committed units come back: `stock += qty`; `StockReleased` is announced |
 
-- Each reservation row moves once: `HELD` → `COMMITTED` or `HELD` → `RELEASED`. Repeating `commit` / `release` changes nothing (returns 0); reserving the same order twice is refused.
+- Each reservation row moves once: `HELD` → `COMMITTED` or `HELD` → `RELEASED`. The one exception is `COMMITTED` → `RETURNED`, for an order paid only after the saga timeout cancelled it. Repeating `commit` / `release` changes nothing (returns 0); reserving the same order twice is refused.
 - **Two orders, same product, same moment:** the product's `version` column (optimistic locking) makes the slower update fail instead of overwriting the other. Spring Framework 7's built-in `@Retryable` then runs the method again with fresh data: up to 5 retries, about 10 → 160 ms apart with random jitter. `RetryConfig` logs every failed attempt.
 - **No deadlocks:** `hibernate.order_updates=true` sends UPDATEs sorted by SKU, so every transaction locks products in the same order.
 - Proven by `ReservationIntegrationTest`: 20 orders grab the last 5 units at the same moment → exactly 5 held, 15 rejected, stock never below 0.
@@ -110,6 +118,7 @@ Migrations in `src/main/resources/db/migration/`:
 - `V1__init.sql`: `products` with CHECK rules (price > 0, stock ≥ 0, 0 ≤ reserved ≤ stock), `outbox`, `processed_events`
 - `V2__seed_products.sql`: 10 demo products `SKU-1` … `SKU-10` (`SKU-10` has only 3 in stock, for out-of-stock demos)
 - `V3__create_reservations.sql`: `reservations` (status `HELD` / `COMMITTED` / `RELEASED`, one row per order + product, foreign key to `products`)
+- `V4__add_returned_reservations.sql`: the status `RETURNED` (committed stock of an order cancelled after all, ADR 0006)
 
 Never edit a merged migration — add the next `V<n>__...sql`.
 

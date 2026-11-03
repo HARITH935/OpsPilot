@@ -32,7 +32,8 @@ class OrderEventsListener {
             case OrderCreated created -> reservations.reserveForOrder(event.eventId(), created);
             // Same key, so same partition: it arrives after the order's OrderCreated, which order-service sent first
             case OrderCancelled cancelled -> reservations.onOrderCancelled(event.eventId(), cancelled.orderId());
-            default -> log.debug("Ignoring {} for order {}", event.eventType(), event.aggregateId());   // OrderConfirmed
+            // OrderConfirmed: the stock was already committed on PaymentCompleted; RefundRequested: for payment
+            default -> log.debug("Ignoring {} for order {}", event.eventType(), event.aggregateId());
         }
     }
 }

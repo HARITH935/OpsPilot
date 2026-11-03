@@ -46,6 +46,20 @@ class ProductTest {
     }
 
     @Test
+    void restockingBringsCommittedUnitsBackIntoTheWarehouse() {
+        Product product = productWithStock(5);
+        product.reserve(2);
+        product.commit(2);   // paid: 2 units left the warehouse
+
+        product.restock(2);   // ...but the order was cancelled after all
+
+        assertThat(product.getStock()).isEqualTo(5);
+        assertThat(product.getReserved()).isZero();
+        assertThat(product.getAvailable()).isEqualTo(5);
+        assertThatThrownBy(() -> product.restock(0)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void cannotReserveMoreThanIsAvailable() {
         Product product = productWithStock(5);
         product.reserve(4);
