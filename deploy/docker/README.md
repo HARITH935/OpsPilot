@@ -1,13 +1,14 @@
 # deploy/docker
 
-Local development stack (Docker Compose). Grows through Phases 1–3; today it runs **PostgreSQL** and **Kafka**.
+Local development stack (Docker Compose). Grows through Phases 1–3; today it runs **PostgreSQL**, **Kafka** and **Redis**.
 
 ## First-time setup
 ```bash
 cd deploy/docker
 cp .env.example .env          # then replace every change-me, e.g. with: openssl rand -hex 16
 ```
-`.env` holds real passwords and is gitignored — never commit it.
+`.env` holds real passwords and is gitignored — never commit it. If you made your `.env` before a new variable was
+added to `.env.example` (e.g. `REDIS_PASSWORD`), add it by hand: `docker compose up` names any that are missing.
 
 ## Start / stop (from the repo root)
 ```bash
@@ -60,4 +61,23 @@ docker exec opspilot-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server loc
 # Read every message in a topic, with its key (Ctrl+C to stop)
 docker exec -it opspilot-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
   --topic orders.events --from-beginning --formatter-property print.key=true
+```
+
+## Redis
+One Redis 7 (`redis:7.4.12-alpine`) for the API gateway's **rate-limit counters** (step 2.9) and, from step 2.10,
+inventory's product cache. All of it is short-lived, so Redis keeps it **in memory only** (no snapshots, no
+append-only file): a restart starts empty, and that is fine. Capped at 64 MB; when full, it drops the least recently
+used keys (`allkeys-lru`). About 10 MB in use.
+
+| Client | Connects to | Password |
+|---|---|---|
+| The gateway on your machine | `localhost:6379` | `REDIS_PASSWORD` from `.env` |
+| Other containers in this compose file | `redis:6379` | the same |
+
+The port is published on `127.0.0.1` only, and a password is required anyway (`NOAUTH Authentication required`
+without it). Inside the container, `redis-cli` logs in by itself (`REDISCLI_AUTH`):
+```bash
+docker exec opspilot-redis redis-cli ping                                   # PONG
+docker exec opspilot-redis redis-cli --scan --pattern 'ratelimit:*'         # the gateway's counters (SCAN never blocks Redis)
+docker exec opspilot-redis redis-cli zcard 'ratelimit:orders:user:demo:admin'   # requests counted in the current window
 ```

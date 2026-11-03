@@ -12,7 +12,10 @@ class StartupChecksTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withUserConfiguration(Settings.class)
-            .withPropertyValues("gateway.jwt.issuer=opspilot-gateway", "gateway.jwt.ttl=30m");
+            .withPropertyValues("gateway.jwt.issuer=opspilot-gateway", "gateway.jwt.ttl=30m",
+                    "gateway.rate-limit.user.requests=20", "gateway.rate-limit.user.window=1s",
+                    "gateway.rate-limit.anonymous.requests=10", "gateway.rate-limit.anonymous.window=1s",
+                    "gateway.rate-limit.login.requests=10", "gateway.rate-limit.login.window=1m");
 
     @Test
     void demoUsersSwitchedOffNeedNoPassword() {
@@ -51,7 +54,28 @@ class StartupChecksTest {
                 .run(context -> assertThat(context).hasFailed());
     }
 
-    @EnableConfigurationProperties({JwtProperties.class, DemoUsersProperties.class})
+    @Test
+    void aRateLimitOfZeroRequestsStopsTheStart() {
+        runner.withPropertyValues("gateway.rate-limit.anonymous.requests=0")
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    @Test
+    void aRateLimitWindowShorterThan100MillisecondsStopsTheStart() {
+        runner.withPropertyValues("gateway.rate-limit.user.window=10ms")
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    @Test
+    void trustedProxiesAreReadAsAList() {
+        runner.withPropertyValues("gateway.rate-limit.trusted-proxies=10.0.0.0/8, 192.168.1.1")
+                .run(context -> assertThat(context.getBean(RateLimitProperties.class).trustedProxies())
+                        .containsExactly("10.0.0.0/8", "192.168.1.1"));
+        runner.withPropertyValues("gateway.rate-limit.trusted-proxies=")   // what GATEWAY_TRUSTED_PROXIES unset gives
+                .run(context -> assertThat(context.getBean(RateLimitProperties.class).trustedProxies()).isEmpty());
+    }
+
+    @EnableConfigurationProperties({JwtProperties.class, DemoUsersProperties.class, RateLimitProperties.class})
     static class Settings {
     }
 }

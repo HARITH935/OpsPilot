@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -19,6 +20,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 // The orders route points at a port where nothing listens any more, as if order-service had crashed
 @SpringBootTest
 @AutoConfigureMockMvc
+@Import(RedisTestcontainersConfiguration.class)   // the rate limiter needs a Redis
 class GatewayServiceDownTest {
 
     private static final String STOPPED_SERVICE = stoppedServiceUrl();

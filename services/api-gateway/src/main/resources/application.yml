@@ -16,6 +16,14 @@ spring:
       # per-route timeouts come with the circuit breakers (step 2.11).
       connect-timeout: ${GATEWAY_CONNECT_TIMEOUT:1s}   # the service doesn't accept the connection in time → 503
       read-timeout: ${GATEWAY_READ_TIMEOUT:2s}         # the service accepted, but its answer takes too long → 504
+  data:
+    redis:
+      # Redis from deploy/docker (or Kubernetes later): only the rate limiter's counters
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 100ms           # a Redis command slower than this counts as a failure → fail-open, not a slow shop
+      connect-timeout: 100ms
   cloud:
     gateway:
       server:
@@ -50,6 +58,21 @@ gateway:
   demo-users:
     enabled: ${DEMO_USERS_ENABLED:false}   # viewer / engineer / admin via POST /auth/token: local + evals only
     password: ${DEMO_USERS_PASSWORD:}      # required (12+ characters) when enabled; no default on purpose
+  # Sliding-window rate limits (architecture doc B2.4). Each route has its own budget per caller.
+  rate-limit:
+    enabled: ${RATE_LIMIT_ENABLED:true}
+    user:                                    # a caller with a valid token, counted by its "sub"
+      requests: ${RATE_LIMIT_USER_REQUESTS:20}
+      window: 1s
+    anonymous:                               # no token: counted by IP address
+      requests: ${RATE_LIMIT_ANONYMOUS_REQUESTS:10}
+      window: 1s
+    login:                                   # POST /auth/token, by IP address: 10 password tries a minute, not 600
+      requests: ${RATE_LIMIT_LOGIN_REQUESTS:10}
+      window: 1m
+    # Proxies whose X-Forwarded-For header is believed: addresses or CIDR ranges, comma-separated. None by default:
+    # locally nothing sits in front of the gateway. In Kubernetes, the Ingress (Phase 4).
+    trusted-proxies: ${GATEWAY_TRUSTED_PROXIES:}
 
 management:
   endpoints:
@@ -60,3 +83,6 @@ management:
     health:
       probes:
         enabled: true   # adds /actuator/health/liveness and /readiness (used by Kubernetes probes)
+  health:
+    redis:
+      enabled: false   # Redis down doesn't make the gateway unhealthy: the limiter fails open (and counts the errors)

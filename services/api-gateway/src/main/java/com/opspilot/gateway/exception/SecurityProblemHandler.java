@@ -6,7 +6,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
@@ -15,17 +14,14 @@ import org.springframework.security.oauth2.server.resource.web.access.BearerToke
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.stereotype.Component;
-import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
-import java.util.LinkedHashMap;
-import java.util.Map;
 
 /**
  * What a client gets when Spring Security turns a request away, as RFC 9457 Problem Details like every other error:
  * 401 = "who are you?" (no token, or a broken / expired / forged one), 403 = "I know who you are, but your role may
  * not do this". Spring's Bearer-token helpers set the status and the standard WWW-Authenticate header (RFC 6750);
- * this class adds the JSON body.
+ * this class adds the JSON body (ProblemResponses).
  */
 @Component
 public class SecurityProblemHandler implements AuthenticationEntryPoint, AccessDeniedHandler {
@@ -34,10 +30,10 @@ public class SecurityProblemHandler implements AuthenticationEntryPoint, AccessD
 
     private final AuthenticationEntryPoint bearerEntryPoint = new BearerTokenAuthenticationEntryPoint();
     private final AccessDeniedHandler bearerAccessDenied = new BearerTokenAccessDeniedHandler();
-    private final JsonMapper json;
+    private final ProblemResponses problems;
 
-    public SecurityProblemHandler(JsonMapper json) {
-        this.json = json;
+    public SecurityProblemHandler(ProblemResponses problems) {
+        this.problems = problems;
     }
 
     // 401. A token that was sent but failed the check is an OAuth2AuthenticationException (e.g. "Jwt expired at ...")
@@ -47,10 +43,10 @@ public class SecurityProblemHandler implements AuthenticationEntryPoint, AccessD
         bearerEntryPoint.commence(request, response, ex);   // 401 + WWW-Authenticate: Bearer ...
         if (ex instanceof OAuth2AuthenticationException) {
             log.info("{} {} refused, bad token: {}", request.getMethod(), request.getRequestURI(), ex.getMessage());
-            write(response, request, HttpStatus.UNAUTHORIZED, "Invalid token",
+            problems.write(response, request, HttpStatus.UNAUTHORIZED, "Invalid token",
                     "The token is invalid or has expired: log in again for a new one");
         } else {
-            write(response, request, HttpStatus.UNAUTHORIZED, "Login required",
+            problems.write(response, request, HttpStatus.UNAUTHORIZED, "Login required",
                     "This request needs a token: log in, then send it as 'Authorization: Bearer <token>'");
         }
     }
@@ -61,19 +57,7 @@ public class SecurityProblemHandler implements AuthenticationEntryPoint, AccessD
             throws IOException, ServletException {
         bearerAccessDenied.handle(request, response, ex);   // 403 + WWW-Authenticate: Bearer error="insufficient_scope"
         log.info("{} {} refused: role not allowed", request.getMethod(), request.getRequestURI());
-        write(response, request, HttpStatus.FORBIDDEN, "Not allowed",
+        problems.write(response, request, HttpStatus.FORBIDDEN, "Not allowed",
                 "Your token is valid, but your role may not do this");
-    }
-
-    private void write(HttpServletResponse response, HttpServletRequest request, HttpStatus status, String title,
-                       String detail) throws IOException {
-        Map<String, Object> problem = new LinkedHashMap<>();
-        problem.put("title", title);
-        problem.put("status", status.value());
-        problem.put("detail", detail);
-        problem.put("instance", request.getRequestURI());
-        response.setStatus(status.value());
-        response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
-        response.getWriter().write(json.writeValueAsString(problem));
     }
 }

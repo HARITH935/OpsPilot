@@ -40,7 +40,7 @@ Prometheus · Grafana · PyTorch · LangGraph · FastAPI · React · TypeScript
 | `docs/` | Progress, ADRs, runbooks |
 
 ## Run locally
-Today (Phase 2 in progress): PostgreSQL and Kafka in Docker, the three services and the API gateway on your machine. Phase 2 connects
+Today (Phase 2 in progress): PostgreSQL, Kafka and Redis in Docker, the three services and the API gateway on your machine. Phase 2 connects
 the services through Kafka step by step (the order saga): an order is reserved and priced by inventory, charged by
 payment, then confirmed (stock committed), or cancelled (out of stock, or payment failed and the stock released).
 Phase 3 turns all of this into a single `docker compose up`.
@@ -48,7 +48,7 @@ Phase 3 turns all of this into a single `docker compose up`.
 **You need:** JDK 21 and Docker Desktop (running).
 
 ```bash
-# 1. Postgres and Kafka: copy the template, fill in your own passwords, start both (Kafka's topics are created for you)
+# 1. Postgres, Kafka and Redis: copy the template, fill in your own passwords, start them (Kafka's topics are created for you)
 cp -n deploy/docker/.env.example deploy/docker/.env   # -n: never overwrites a .env you already have
 docker compose -f deploy/docker/docker-compose.yml up -d
 deploy/docker/kafka/smoke-test.sh                     # optional: checks Kafka and its topics
@@ -66,7 +66,9 @@ DB_PASSWORD=$(grep '^PAYMENTS_DB_PASSWORD=' deploy/docker/.env | cut -d= -f2) \
 
 # 4. The front door on :8080 (tell it where order-service is if you moved it, e.g. ORDER_SERVICE_URL=http://localhost:18081),
 #    with the demo logins viewer / engineer / admin (their password is DEMO_USERS_PASSWORD in deploy/docker/.env)
+#    and the rate limiter's Redis (REDIS_PASSWORD)
 DEMO_USERS_ENABLED=true DEMO_USERS_PASSWORD=$(grep '^DEMO_USERS_PASSWORD=' deploy/docker/.env | cut -d= -f2-) \
+  REDIS_PASSWORD=$(grep '^REDIS_PASSWORD=' deploy/docker/.env | cut -d= -f2-) \
   java -Xmx128m -jar services/api-gateway/target/api-gateway-0.0.1-SNAPSHOT.jar
 ```
 `-Xmx256m` keeps each service small (about 700 MB for all three, plus about 150 MB for the gateway). If a port is
@@ -76,6 +78,8 @@ taken, add `SERVER_PORT=<free port>` in front, e.g. `SERVER_PORT=18081` for orde
 `/api/products/**` and `/api/payments/**` to the right service. A stopped service answers 503 there, a too slow one 504.
 Reading and ordering are open to everyone. Adding a product needs an ADMIN token: log in with `POST /auth/token`,
 then send `Authorization: Bearer <token>` ([how](services/api-gateway/README.md#login-and-roles-jwt)).
+Too many requests in a short time get **429** with `Retry-After`: 10 per second per address without a token, 20 with
+one ([rate limiting](services/api-gateway/README.md#rate-limiting)).
 
 | Service | Port | Try it | Full API |
 |---|---|---|---|
