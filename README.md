@@ -79,7 +79,8 @@ taken, add `SERVER_PORT=<free port>` in front, e.g. `SERVER_PORT=18081` for orde
 Reading and ordering are open to everyone. Adding a product needs an ADMIN token: log in with `POST /auth/token`,
 then send `Authorization: Bearer <token>` ([how](services/api-gateway/README.md#login-and-roles-jwt)).
 Too many requests in a short time get **429** with `Retry-After`: 10 per second per address without a token, 20 with
-one ([rate limiting](services/api-gateway/README.md#rate-limiting)).
+one ([rate limiting](services/api-gateway/README.md#rate-limiting)). To see it under load, run the Locust test in
+[`loadgen/`](loadgen/README.md) (needs [uv](https://docs.astral.sh/uv/)).
 
 | Service | Port | Try it | Full API |
 |---|---|---|---|
