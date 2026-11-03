@@ -7,6 +7,8 @@ import com.opspilot.events.PaymentCompleted;
 import com.opspilot.events.PaymentFailed;
 import com.opspilot.events.StockReserved;
 import com.opspilot.events.Topics;
+import com.opspilot.order.repository.OrderRepository;
+import com.opspilot.order.service.OrderService;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -19,17 +21,21 @@ import org.springframework.boot.kafka.autoconfigure.KafkaConnectionDetails;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.MediaType;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -54,6 +60,15 @@ class PaymentEventsIntegrationTest {
 
     @Autowired
     private KafkaConnectionDetails connection;
+
+    @Autowired
+    private OrderService orderService;
+
+    @Autowired
+    private OrderRepository orderRepository;
+
+    @Autowired
+    private TransactionOperations transactions;
 
     @Test
     void paymentCompletedConfirmsTheOrderAndAnnouncesOrderConfirmed() throws Exception {
@@ -106,6 +121,24 @@ class PaymentEventsIntegrationTest {
         assertThat(awaitOrderEvents(order, 2)).containsExactly("OrderCreated", "OrderConfirmed");   // one confirm
         // Without the duplicate check, the second confirm would fail ("already CONFIRMED") and land in the DLQ
         assertThat(deadLetters(Topics.PAYMENTS, order)).isEmpty();
+    }
+
+    @Test
+    void whenThePaymentResultAndTheSagaTimeoutCollideTheFirstToSaveWins() throws Exception {
+        UUID order = placeOrder();
+
+        assertThatThrownBy(() -> transactions.executeWithoutResult(tx -> {
+            // The timeout job's transaction has read the order (PENDING, version 0)...
+            orderRepository.findById(order).orElseThrow();
+            // ...when the payment result is applied and saved first, on another thread (version 0 -> 1)
+            CompletableFuture.runAsync(() -> orderService.onPaymentCompleted(UUID.randomUUID(),
+                    new PaymentCompleted(order, UUID.randomUUID(), TOTAL))).join();
+            orderService.cancelTimedOut(order);   // the job still has its PENDING copy, so it cancels it...
+        })).isInstanceOf(OptimisticLockingFailureException.class);   // ...but the save finds version 1, not 0
+
+        // The payment won, and the job's whole transaction was rolled back: no TIMEOUT, no OrderCancelled sent
+        mockMvc.perform(get("/api/orders/{id}", order)).andExpect(jsonPath("$.status").value("CONFIRMED"));
+        assertThat(awaitOrderEvents(order, 2)).containsExactly("OrderCreated", "OrderConfirmed");
     }
 
     private UUID placeOrder() throws Exception {

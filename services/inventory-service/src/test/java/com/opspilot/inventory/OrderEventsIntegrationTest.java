@@ -2,8 +2,10 @@ package com.opspilot.inventory;
 
 import com.opspilot.events.EventEnvelope;
 import com.opspilot.events.EventJson;
+import com.opspilot.events.OrderCancelled;
 import com.opspilot.events.OrderCreated;
 import com.opspilot.events.StockRejected;
+import com.opspilot.events.StockReleased;
 import com.opspilot.events.StockReserved;
 import com.opspilot.events.Topics;
 import com.opspilot.inventory.model.Product;
@@ -32,7 +34,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 // Inventory's saga step, end to end: OrderCreated on orders.events -> listener -> reservation + outbox -> publisher
-// -> StockReserved / StockRejected on inventory.events. Kafka and Postgres are real (Testcontainers).
+// -> StockReserved / StockRejected on inventory.events; OrderCancelled -> release -> StockReleased.
+// Kafka and Postgres are real (Testcontainers).
 @SpringBootTest
 @Import({TestcontainersConfiguration.class, KafkaTestcontainersConfiguration.class})
 class OrderEventsIntegrationTest {
@@ -93,6 +96,34 @@ class OrderEventsIntegrationTest {
     }
 
     @Test
+    void orderCancelledReleasesTheHeldStockAndIsAnsweredWithStockReleased() throws Exception {
+        String sku = newProduct("8.00", 10);
+        UUID order = UUID.randomUUID();
+        send(orderCreated(order, sku, 4));
+        awaitReply(order);   // StockReserved: 4 units held
+
+        send(orderCancelled(order, "TIMEOUT"));   // what order-service sends when the saga times out
+
+        await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofMillis(500)).until(() -> replies(order).size() == 2);
+        assertThat(replies(order).get(1)).isEqualTo(new StockReleased(order));
+        assertThat(reservedUnits(sku)).isZero();   // back on sale
+        assertThat(reservationStatus(order)).isEqualTo("RELEASED");
+    }
+
+    @Test
+    void orderCancelledWithNothingHeldReleasesNothing() throws Exception {
+        String sku = newProduct("24.99", 3);
+        UUID order = UUID.randomUUID();
+        send(orderCreated(order, sku, 5));
+        awaitReply(order);   // StockRejected: nothing held
+
+        awaitConsumed(send(orderCancelled(order, "OUT_OF_STOCK")));   // order cancels it because of that rejection
+
+        assertThat(outboxEvents(order)).containsExactly("StockRejected");   // no StockReleased written
+        assertThat(deadLetters(order)).isEmpty();
+    }
+
+    @Test
     void aMessageThatIsNotAnEventIsDeadLetteredAndTheNextOneStillGetsThrough() throws Exception {
         String sku = newProduct("1.00", 10);
         UUID order = UUID.randomUUID();
@@ -118,6 +149,10 @@ class OrderEventsIntegrationTest {
 
     private static String orderCreated(UUID order, String sku, int qty) {
         return EventJson.write(EventEnvelope.of(new OrderCreated(order, "c-1", List.of(new OrderCreated.Item(sku, qty))), null));
+    }
+
+    private static String orderCancelled(UUID order, String reason) {
+        return EventJson.write(EventEnvelope.of(new OrderCancelled(order, reason), null));
     }
 
     private RecordMetadata send(String event) throws Exception {
@@ -156,6 +191,17 @@ class OrderEventsIntegrationTest {
 
     private int reservedUnits(String sku) {
         return productRepository.findById(sku).orElseThrow().getReserved();
+    }
+
+    private String reservationStatus(UUID order) {
+        return jdbc.sql("SELECT status FROM reservations WHERE order_id = :order")
+                .param("order", order).query(String.class).single();
+    }
+
+    // Every event inventory wrote for this order, sent or not yet: checked right away, with no wait for the publisher
+    private List<String> outboxEvents(UUID order) {
+        return jdbc.sql("SELECT event_type FROM outbox WHERE aggregate_id = :order ORDER BY created_at")
+                .param("order", order).query(String.class).list();
     }
 
     private long reservationRows(UUID order) {

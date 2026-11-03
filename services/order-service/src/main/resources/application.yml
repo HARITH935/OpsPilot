@@ -24,3 +24,9 @@ management:
     health:
       probes:
         enabled: true   # adds /actuator/health/liveness and /readiness (used by Kubernetes probes)
+
+# The saga timeout (SagaTimeoutJob): every order ends CONFIRMED or CANCELLED within about this long
+order:
+  saga:
+    timeout: ${SAGA_TIMEOUT:30s}                          # a PENDING order older than this is cancelled (reason TIMEOUT)
+    check-interval: ${SAGA_TIMEOUT_CHECK_INTERVAL:5s}     # how often the job looks; an order may wait this much longer

@@ -1,6 +1,6 @@
 # order-service (:8081)
 
-Orders API, order saga participant, transactional outbox.
+Orders API, order saga participant (with a timeout), transactional outbox.
 
 ## Run
 Needs the local Postgres from `deploy/docker` running (see its README).
@@ -63,7 +63,7 @@ The list endpoint returns summaries without items, so it never runs one extra qu
 | in | `payments.events` | `PaymentCompleted` `{orderId, paymentId, amount}` | confirms the order and announces ↓ |
 | out | `orders.events` | `OrderConfirmed` `{orderId}` | the order is final: paid, stock committed by inventory |
 | in | `payments.events` | `PaymentFailed` `{orderId, paymentId, amount, reason}` | cancels the order with reason `PAYMENT_FAILED` and announces ↓ |
-| out | `orders.events` | `OrderCancelled` `{orderId, reason}` | the order was cancelled |
+| out | `orders.events` | `OrderCancelled` `{orderId, reason}` | the order was cancelled: `OUT_OF_STOCK` / `UNKNOWN_PRODUCT`, `PAYMENT_FAILED` or `TIMEOUT`; inventory releases any stock still held |
 
 Every event is keyed by the order id. `InventoryEventsListener` and `PaymentEventsListener` (both consumer group
 `order-service`) handle each event once: the duplicate mark in `processed_events` is saved in the same transaction as
@@ -81,6 +81,21 @@ docker exec -it opspilot-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootst
 ```
 Unsent events: `SELECT event_type, aggregate_id, created_at FROM outbox WHERE published_at IS NULL;`
 
+## Saga timeout
+Every order must end `CONFIRMED` or `CANCELLED` within about 30 s, even if inventory or payment never answers.
+`SagaTimeoutJob` looks every 5 s for orders still `PENDING` after `SAGA_TIMEOUT` (oldest first, at most 100 per run,
+using the `(status, created_at)` index) and cancels each with reason `TIMEOUT`, announcing `OrderCancelled`, so
+inventory releases the stock it holds.
+- Each order is cancelled in its own small transaction. If a payment result, or a second copy of order-service, saves
+  the order first, `@Version` makes the job's save fail: the job skips that order and the other change stands.
+- **A result that arrives after the timeout** (`PaymentCompleted`, `PaymentFailed`, `StockRejected`) changes nothing,
+  and is not retried or dead-lettered. A late `PaymentCompleted` means money was taken for a cancelled order: it is
+  logged as `WARN … it needs a refund`. Refunds come in step 2.6b.
+
+Try it: run order-service and inventory-service but not payment-service, and place an order. About 30–35 s later it
+is `CANCELLED` / `TIMEOUT`, and inventory's `reserved` count is back where it was. Start payment-service: it charges
+the order late, and order-service logs the refund warning.
+
 ## Operational endpoints
 | Path | Purpose |
 |---|---|
@@ -97,6 +112,8 @@ Unsent events: `SELECT event_type, aggregate_id, created_at FROM outbox WHERE pu
 | `DB_USERNAME` | `orders_user` | Database login |
 | `DB_PASSWORD` | — (required) | Database password |
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka address (`kafka:19092` from inside Docker) |
+| `SAGA_TIMEOUT` | `30s` | A `PENDING` order older than this is cancelled (`TIMEOUT`); at least `1s` |
+| `SAGA_TIMEOUT_CHECK_INTERVAL` | `5s` | How often the timeout job looks; an order can wait up to this much longer |
 
 ## Database
 Migrations in `src/main/resources/db/migration/`:
@@ -107,5 +124,5 @@ Never edit a merged migration — add the next `V<n>__...sql`.
 
 ## Packages
 `controller` → `service` → `repository` → database. `dto` = API shapes, `model` = JPA entities,
-`event` = the Kafka listeners (`InventoryEventsListener`, `PaymentEventsListener`; the outbox itself lives in `common-messaging`), `config` = Spring config
-(`MessagingConfig` turns on the outbox publisher), `exception` = error handling.
+`service` also holds `SagaTimeoutJob`. `event` = the Kafka listeners (`InventoryEventsListener`, `PaymentEventsListener`; the outbox itself lives in `common-messaging`), `config` = Spring config
+(`MessagingConfig` turns on scheduling: the outbox publisher and the timeout job; `SagaProperties` = the timeout settings), `exception` = error handling.

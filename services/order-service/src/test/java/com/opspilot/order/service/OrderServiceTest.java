@@ -246,6 +246,61 @@ class OrderServiceTest {
     }
 
     @Test
+    void aTimedOutOrderIsCancelledAndAnnounced() {
+        Order order = new Order("c-1");
+        when(orderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+
+        assertThat(orderService.cancelTimedOut(order.getId())).isTrue();
+
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.CANCELLED);
+        assertThat(order.getCancelReason()).isEqualTo("TIMEOUT");
+        verify(outbox).write(new OrderCancelled(order.getId(), "TIMEOUT"));   // inventory releases the stock on it
+    }
+
+    @Test
+    void anOrderDecidedAfterTheTimeoutJobFoundItIsLeftAlone() {
+        Order order = new Order("c-1");
+        order.confirm();   // the payment result was applied in between
+        when(orderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+
+        assertThat(orderService.cancelTimedOut(order.getId())).isFalse();
+
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.CONFIRMED);
+        verifyNoInteractions(outbox);
+    }
+
+    @Test
+    void aPaymentCompletedAfterTheTimeoutChangesNothing() {   // logged as a warning: the money must be refunded
+        UUID eventId = UUID.randomUUID();
+        Order order = new Order("c-1");
+        order.cancel("TIMEOUT");
+        when(processedEvents.markProcessed(eventId)).thenReturn(true);
+        when(orderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+
+        // No exception: so no retries and no dead-letter topic for an event that can never be applied
+        orderService.onPaymentCompleted(eventId, new PaymentCompleted(order.getId(), UUID.randomUUID(), BigDecimal.TEN));
+
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.CANCELLED);
+        assertThat(order.getCancelReason()).isEqualTo("TIMEOUT");
+        verifyNoInteractions(outbox);
+    }
+
+    @Test
+    void aFailureThatArrivesAfterTheTimeoutChangesNothing() {
+        Order order = new Order("c-1");
+        order.cancel("TIMEOUT");
+        when(processedEvents.markProcessed(any())).thenReturn(true);
+        when(orderRepository.findById(order.getId())).thenReturn(Optional.of(order));
+
+        orderService.onPaymentFailed(UUID.randomUUID(),
+                new PaymentFailed(order.getId(), UUID.randomUUID(), BigDecimal.TEN, "PROVIDER_ERROR"));
+        orderService.onStockRejected(UUID.randomUUID(), new StockRejected(order.getId(), "SKU-10", "OUT_OF_STOCK"));
+
+        assertThat(order.getCancelReason()).isEqualTo("TIMEOUT");   // the first reason stays
+        verifyNoInteractions(outbox);   // OrderCancelled was already sent once, by the timeout
+    }
+
+    @Test
     void listOrdersFiltersByStatusNewestFirst() {
         Order order = new Order("c-1");
         when(orderRepository.findByStatus(eq(OrderStatus.PENDING), any(Pageable.class)))

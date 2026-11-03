@@ -255,6 +255,42 @@ class ReservationServiceTest {
     }
 
     @Test
+    void orderCancelledReleasesWhateverIsStillHeldAndAnnouncesStockReleased() {   // e.g. the saga timed out
+        UUID eventId = UUID.randomUUID();
+        Product keyboard = product("SKU-1", "89.99", 10);
+        keyboard.reserve(3);
+        when(processedEvents.markProcessed(eventId)).thenReturn(true);
+        when(reservationRepository.findByOrderIdAndStatus(ORDER, ReservationStatus.HELD))
+                .thenReturn(List.of(new Reservation(ORDER, "SKU-1", 3)));
+        when(productRepository.findAllById(any())).thenReturn(List.of(keyboard));
+
+        assertThat(reservationService.onOrderCancelled(eventId, ORDER)).isEqualTo(1);
+
+        assertThat(keyboard.getAvailable()).isEqualTo(10);
+        verify(outbox).write(new StockReleased(ORDER));
+    }
+
+    @Test
+    void orderCancelledWithNothingHeldAnnouncesNothing() {
+        UUID eventId = UUID.randomUUID();
+        when(processedEvents.markProcessed(eventId)).thenReturn(true);
+        when(reservationRepository.findByOrderIdAndStatus(ORDER, ReservationStatus.HELD)).thenReturn(List.of());
+
+        // e.g. inventory rejected the order, or released it already on PaymentFailed
+        assertThat(reservationService.onOrderCancelled(eventId, ORDER)).isZero();
+        verifyNoInteractions(outbox);
+    }
+
+    @Test
+    void aDuplicateOrderCancelledChangesNothing() {
+        UUID eventId = UUID.randomUUID();
+        when(processedEvents.markProcessed(eventId)).thenReturn(false);   // handled before
+
+        assertThat(reservationService.onOrderCancelled(eventId, ORDER)).isZero();
+        verifyNoInteractions(productRepository, reservationRepository, outbox);
+    }
+
+    @Test
     void aDuplicatePaymentEventChangesNothing() {
         UUID eventId = UUID.randomUUID();
         when(processedEvents.markProcessed(eventId)).thenReturn(false);   // handled before

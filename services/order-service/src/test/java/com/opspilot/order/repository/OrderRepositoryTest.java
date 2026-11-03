@@ -10,10 +10,13 @@ import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.jpa.test.autoconfigure.TestEntityManager;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Limit;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
+
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -99,6 +102,27 @@ class OrderRepositoryTest {
     }
 
     @Test
+    void findsTheIdsOfPendingOrdersCreatedBeforeTheCutoffOldestFirst() {   // the saga timeout's search
+        Order oldest = orderRepository.save(new Order("customer-1"));
+        Order old = orderRepository.save(new Order("customer-2"));
+        orderRepository.save(new Order("customer-3"));   // fresh: created just now
+        Order oldButDecided = new Order("customer-4");
+        oldButDecided.cancel("OUT_OF_STOCK");
+        orderRepository.save(oldButDecided);
+        orderRepository.flush();
+        Instant now = Instant.now();
+        moveCreatedAt(oldest, now.minusSeconds(60));
+        moveCreatedAt(old, now.minusSeconds(40));
+        moveCreatedAt(oldButDecided, now.minusSeconds(90));
+        Instant cutoff = now.minusSeconds(30);
+
+        assertThat(orderRepository.findIdsByStatusCreatedBefore(OrderStatus.PENDING, cutoff, Limit.of(10)))
+                .containsExactly(oldest.getId(), old.getId());   // not the fresh one, not the decided one
+        assertThat(orderRepository.findIdsByStatusCreatedBefore(OrderStatus.PENDING, cutoff, Limit.of(1)))
+                .containsExactly(oldest.getId());   // the limit keeps the oldest
+    }
+
+    @Test
     void staleUpdateIsRejectedByOptimisticLocking() {
         Order order = orderRepository.saveAndFlush(new Order("customer-1"));   // version 0
 
@@ -112,5 +136,14 @@ class OrderRepositoryTest {
 
         assertThatThrownBy(() -> orderRepository.saveAndFlush(order))
                 .isInstanceOf(ObjectOptimisticLockingFailureException.class);
+    }
+
+    // @PrePersist stamped "now"; move the order back in time, as if it had been waiting that long
+    private void moveCreatedAt(Order order, Instant createdAt) {
+        entityManager.getEntityManager()
+                .createNativeQuery("UPDATE orders SET created_at = :createdAt WHERE id = :id")
+                .setParameter("createdAt", createdAt)
+                .setParameter("id", order.getId())
+                .executeUpdate();
     }
 }

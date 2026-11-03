@@ -76,7 +76,8 @@ in front, e.g. `SERVER_PORT=18081` for order-service.
 Every service also has `/actuator/health` (plus `/liveness` and `/readiness`) and `/actuator/prometheus`.
 With all three running, a new order is `CONFIRMED` about 1–2 s after the `POST` (check `GET /api/orders/{id}`).
 Start payment-service with `PAYMENT_FAILURE_RATE=1.0` in front to see the other ending: `CANCELLED` with reason
-`PAYMENT_FAILED`, and the stock back on sale.
+`PAYMENT_FAILED`, and the stock back on sale. Leave payment-service off and the order is `CANCELLED` with reason
+`TIMEOUT` about 30 s later (the saga timeout), its stock released too.
 
 ## Progress
 See [docs/PROGRESS.md](docs/PROGRESS.md).

@@ -2,6 +2,7 @@ package com.opspilot.inventory.event;
 
 import com.opspilot.events.EventEnvelope;
 import com.opspilot.events.EventJson;
+import com.opspilot.events.OrderCancelled;
 import com.opspilot.events.OrderCreated;
 import com.opspilot.events.Topics;
 import com.opspilot.inventory.service.ReservationService;
@@ -29,7 +30,9 @@ class OrderEventsListener {
         EventEnvelope event = EventJson.read(message);   // not a valid event: goes to the dead-letter topic at once
         switch (event.payload()) {
             case OrderCreated created -> reservations.reserveForOrder(event.eventId(), created);
-            default -> log.debug("Ignoring {} for order {}", event.eventType(), event.aggregateId());   // step 2.5
+            // Same key, so same partition: it arrives after the order's OrderCreated, which order-service sent first
+            case OrderCancelled cancelled -> reservations.onOrderCancelled(event.eventId(), cancelled.orderId());
+            default -> log.debug("Ignoring {} for order {}", event.eventType(), event.aggregateId());   // OrderConfirmed
         }
     }
 }
