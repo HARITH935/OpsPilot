@@ -1,0 +1,47 @@
+spring:
+  application:
+    name: api-gateway
+  threads:
+    virtual:
+      enabled: true   # each request runs on a Java 21 virtual thread: waiting for a slow service costs almost nothing
+  mvc:
+    problemdetails:
+      enabled: true   # Spring's own errors (e.g. 404 for an unknown path) as RFC 9457 Problem Details, like the services
+  http:
+    clients:
+      # The HTTP client the gateway uses to call the services. The same limits for every route for now;
+      # per-route timeouts come with the circuit breakers (step 2.11).
+      connect-timeout: ${GATEWAY_CONNECT_TIMEOUT:1s}   # the service doesn't accept the connection in time → 503
+      read-timeout: ${GATEWAY_READ_TIMEOUT:2s}         # the service accepted, but its answer takes too long → 504
+  cloud:
+    gateway:
+      server:
+        webmvc:
+          # A route = "requests matching these predicates are sent to this uri". The path is passed on unchanged:
+          # GET /api/orders/42 on the gateway becomes GET /api/orders/42 on order-service.
+          routes:
+            - id: orders
+              uri: ${ORDER_SERVICE_URL:http://localhost:8081}
+              predicates:
+                - Path=/api/orders/**     # ** = any number of path segments, none included: /api/orders matches too
+            - id: products
+              uri: ${INVENTORY_SERVICE_URL:http://localhost:8083}
+              predicates:
+                - Path=/api/products/**
+            - id: payments
+              uri: ${PAYMENT_SERVICE_URL:http://localhost:8082}
+              predicates:
+                - Path=/api/payments/**
+
+server:
+  port: ${SERVER_PORT:8080}   # env var SERVER_PORT, default 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus   # only these actuator endpoints are reachable over HTTP
+  endpoint:
+    health:
+      probes:
+        enabled: true   # adds /actuator/health/liveness and /readiness (used by Kubernetes probes)

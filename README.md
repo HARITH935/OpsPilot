@@ -40,7 +40,7 @@ Prometheus · Grafana · PyTorch · LangGraph · FastAPI · React · TypeScript
 | `docs/` | Progress, ADRs, runbooks |
 
 ## Run locally
-Today (Phase 2 in progress): PostgreSQL and Kafka in Docker, the three services on your machine. Phase 2 connects
+Today (Phase 2 in progress): PostgreSQL and Kafka in Docker, the three services and the API gateway on your machine. Phase 2 connects
 the services through Kafka step by step (the order saga): an order is reserved and priced by inventory, charged by
 payment, then confirmed (stock committed), or cancelled (out of stock, or payment failed and the stock released).
 Phase 3 turns all of this into a single `docker compose up`.
@@ -63,12 +63,19 @@ DB_PASSWORD=$(grep '^INVENTORY_DB_PASSWORD=' deploy/docker/.env | cut -d= -f2) \
   java -Xmx256m -jar services/inventory-service/target/inventory-service-0.0.1-SNAPSHOT.jar
 DB_PASSWORD=$(grep '^PAYMENTS_DB_PASSWORD=' deploy/docker/.env | cut -d= -f2) \
   java -Xmx256m -jar services/payment-service/target/payment-service-0.0.1-SNAPSHOT.jar
+
+# 4. The front door on :8080 (tell it where order-service is if you moved it, e.g. ORDER_SERVICE_URL=http://localhost:18081)
+java -Xmx128m -jar services/api-gateway/target/api-gateway-0.0.1-SNAPSHOT.jar
 ```
-`-Xmx256m` keeps each service small (about 700 MB for all three). If a port is taken, add `SERVER_PORT=<free port>`
-in front, e.g. `SERVER_PORT=18081` for order-service.
+`-Xmx256m` keeps each service small (about 700 MB for all three, plus about 150 MB for the gateway). If a port is
+taken, add `SERVER_PORT=<free port>` in front, e.g. `SERVER_PORT=18081` for order-service.
+
+**Use port 8080 for everything:** the [API gateway](services/api-gateway/README.md) sends `/api/orders/**`,
+`/api/products/**` and `/api/payments/**` to the right service. A stopped service answers 503 there, a too slow one 504.
 
 | Service | Port | Try it | Full API |
 |---|---|---|---|
+| **api-gateway** | **8080** | `curl 'localhost:8080/api/products?size=3'` (any path below works here) | [README](services/api-gateway/README.md) |
 | order-service | 8081 | `curl -i -X POST localhost:8081/api/orders -H 'Content-Type: application/json' -d '{"customerId":"c-1","items":[{"sku":"SKU-1","qty":2}]}'` | [README](services/order-service/README.md) |
 | inventory-service | 8083 | `curl 'localhost:8083/api/products?size=3'` | [README](services/inventory-service/README.md) |
 | payment-service | 8082 | `curl localhost:8082/api/payments` | [README](services/payment-service/README.md) |
