@@ -30,5 +30,6 @@
         <module>order-service</module>
         <module>inventory-service</module>
         <module>payment-service</module>
+        <module>api-gateway</module>        <!-- last: the front door to the three services (no code dependency on them) -->
     </modules>
 </project>
