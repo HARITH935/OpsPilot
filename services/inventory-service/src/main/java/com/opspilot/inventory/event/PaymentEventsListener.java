@@ -31,7 +31,7 @@ class PaymentEventsListener {
         switch (event.payload()) {
             case PaymentCompleted completed -> reservations.onPaymentCompleted(event.eventId(), completed.orderId());
             case PaymentFailed failed -> reservations.onPaymentFailed(event.eventId(), failed.orderId());
-            default -> log.debug("Ignoring {} for order {}", event.eventType(), event.aggregateId());
+            default -> log.debug("Ignoring {} for order {}", event.eventType(), event.aggregateId());   // PaymentRefunded
         }
     }
 }

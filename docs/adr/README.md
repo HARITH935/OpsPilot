@@ -10,3 +10,4 @@ Each records the context, the decision, the alternatives considered and the cons
 | [0003](0003-phase1-foundations.md) | Spring Boot 4.1, one Maven parent, one PostgreSQL with a database per service | 2026-10-30 |
 | [0004](0004-orders-priced-by-inventory.md) | Orders are priced by inventory during the saga | 2026-10-30 |
 | [0005](0005-phase2-foundations.md) | Phase 2: Spring Cloud Gateway MVC, a shared messaging module, a polling outbox, open reads | 2026-11-01 |
+| [0006](0006-refund-late-payments.md) | Refund a payment that completed after its order was cancelled | 2026-11-03 |

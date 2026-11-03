@@ -64,6 +64,8 @@ The list endpoint returns summaries without items, so it never runs one extra qu
 | out | `orders.events` | `OrderConfirmed` `{orderId}` | the order is final: paid, stock committed by inventory |
 | in | `payments.events` | `PaymentFailed` `{orderId, paymentId, amount, reason}` | cancels the order with reason `PAYMENT_FAILED` and announces ↓ |
 | out | `orders.events` | `OrderCancelled` `{orderId, reason}` | the order was cancelled: `OUT_OF_STOCK` / `UNKNOWN_PRODUCT`, `PAYMENT_FAILED` or `TIMEOUT`; inventory releases any stock still held |
+| out | `orders.events` | `RefundRequested` `{orderId, paymentId}` | a `PaymentCompleted` arrived for an order already cancelled (saga timeout): payment gives the money back ([ADR 0006](../../docs/adr/0006-refund-late-payments.md)) |
+| in | `payments.events` | `PaymentRefunded` `{orderId, paymentId, amount}` | nothing: the order stays cancelled |
 
 Every event is keyed by the order id. `InventoryEventsListener` and `PaymentEventsListener` (both consumer group
 `order-service`) handle each event once: the duplicate mark in `processed_events` is saved in the same transaction as
@@ -88,13 +90,15 @@ using the `(status, created_at)` index) and cancels each with reason `TIMEOUT`, 
 inventory releases the stock it holds.
 - Each order is cancelled in its own small transaction. If a payment result, or a second copy of order-service, saves
   the order first, `@Version` makes the job's save fail: the job skips that order and the other change stands.
-- **A result that arrives after the timeout** (`PaymentCompleted`, `PaymentFailed`, `StockRejected`) changes nothing,
-  and is not retried or dead-lettered. A late `PaymentCompleted` means money was taken for a cancelled order: it is
-  logged as `WARN … it needs a refund`. Refunds come in step 2.6b.
+- **A result that arrives after the timeout** (`PaymentCompleted`, `PaymentFailed`, `StockRejected`) doesn't change
+  the order, and is not retried or dead-lettered. A late `PaymentCompleted` means money was taken for a cancelled
+  order, so order-service announces `RefundRequested` in the same transaction (logged as `WARN … asking for a refund`).
+  payment-service refunds it and answers `PaymentRefunded` ([ADR 0006](../../docs/adr/0006-refund-late-payments.md)).
+  Only order-service can see this reliably: the cancel and the payment result change the same order row.
 
 Try it: run order-service and inventory-service but not payment-service, and place an order. About 30–35 s later it
 is `CANCELLED` / `TIMEOUT`, and inventory's `reserved` count is back where it was. Start payment-service: it charges
-the order late, and order-service logs the refund warning.
+the order late, order-service asks for a refund, and about a second later the payment is `REFUNDED`.
 
 ## Operational endpoints
 | Path | Purpose |

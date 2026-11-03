@@ -33,9 +33,9 @@ class EventTypeTest {
                         Collectors.mapping(EventType::wireName, Collectors.toList())));
 
         assertThat(eventsByTopic).containsExactly(
-                entry("orders.events", List.of("OrderCreated", "OrderConfirmed", "OrderCancelled")),
+                entry("orders.events", List.of("OrderCreated", "OrderConfirmed", "OrderCancelled", "RefundRequested")),
                 entry("inventory.events", List.of("StockReserved", "StockRejected", "StockReleased")),
-                entry("payments.events", List.of("PaymentCompleted", "PaymentFailed")));
+                entry("payments.events", List.of("PaymentCompleted", "PaymentFailed", "PaymentRefunded")));
     }
 
     @Test

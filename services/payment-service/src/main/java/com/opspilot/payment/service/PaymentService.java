@@ -3,6 +3,7 @@ package com.opspilot.payment.service;
 import com.opspilot.events.EventPayload;
 import com.opspilot.events.PaymentCompleted;
 import com.opspilot.events.PaymentFailed;
+import com.opspilot.events.PaymentRefunded;
 import com.opspilot.messaging.consumer.ProcessedEvents;
 import com.opspilot.messaging.outbox.OutboxWriter;
 import com.opspilot.payment.dto.PageResponse;
@@ -87,6 +88,43 @@ public class PaymentService {
         }
 
         log.info("Payment {} for order {}: {} {}", payment.getId(), orderId, payment.getStatus(), amount);
+        return PaymentResponse.from(payment);
+    }
+
+    /**
+     * Refunds a payment once, for the RefundRequested event {@code eventId}. order-service asks for it when the payment
+     * completed after the saga timeout had already cancelled the order (ADR 0006). If the payment is already refunded
+     * (the same request delivered again), it is returned and the provider is not called again. Otherwise the provider
+     * gives back the amount stored with the payment, outside any transaction (as in charge). Then one transaction saves
+     * the event's duplicate mark and the REFUNDED payment, and writes PaymentRefunded to the outbox.
+     *
+     * <p>If the provider refuses, PaymentProviderException goes up to the Kafka error handler and nothing is saved:
+     * the request is retried, then parked in orders.events.dlq for a human.
+     */
+    public PaymentResponse refund(UUID eventId, UUID paymentId) {
+        Payment payment = paymentRepository.findById(paymentId).orElseThrow(() -> new PaymentNotFoundException(paymentId));
+        if (payment.getStatus() == PaymentStatus.REFUNDED) {
+            log.info("Payment {} for order {} is already refunded; not refunding again", paymentId, payment.getOrderId());
+            return PaymentResponse.from(payment);
+        }
+        payment.refund();   // COMPLETED → REFUNDED, in memory only for now; throws for a FAILED payment
+
+        paymentProvider.refund(payment.getOrderId(), payment.getAmount());   // outside any transaction
+        Boolean saved = transactions.execute(tx -> {   // short: only database work, the provider call is done
+            if (!processedEvents.markProcessed(eventId)) {
+                return false;   // another delivery of this request finished in the meantime
+            }
+            // The version read above must still be the current one: if another refund saved first, this fails
+            paymentRepository.saveAndFlush(payment);
+            outbox.write(new PaymentRefunded(payment.getOrderId(), payment.getId(), payment.getAmount()));
+            return true;
+        });
+        if (!Boolean.TRUE.equals(saved)) {
+            log.info("Event {} for payment {} was already handled, skipping the duplicate", eventId, paymentId);
+            return paymentRepository.findById(paymentId).map(PaymentResponse::from).orElseThrow();
+        }
+
+        log.info("Payment {} for order {} refunded: {}", paymentId, payment.getOrderId(), payment.getAmount());
         return PaymentResponse.from(payment);
     }
 

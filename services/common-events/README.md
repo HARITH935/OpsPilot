@@ -1,6 +1,6 @@
 # common-events
 
-The events the services send each other through Kafka (from Phase 2): the envelope, the eight saga events, their
+The events the services send each other through Kafka (from Phase 2): the envelope, the ten saga events, their
 names and topics, and their JSON format. A plain Java library (no Spring, no database). Every service depends on it,
 so a sender and a receiver can never disagree about the format.
 
@@ -37,12 +37,14 @@ An envelope whose `eventType` or `aggregateId` contradicts its payload is refuse
 |---|---|---|---|---|
 | `OrderCreated` | `orders.events` | order | `orderId`, `customerId`, `items[sku, qty]` | inventory reserves the stock |
 | `OrderConfirmed` | `orders.events` | order | `orderId` | — (the order is final) |
-| `OrderCancelled` | `orders.events` | order | `orderId`, `reason` | inventory releases any held stock |
+| `OrderCancelled` | `orders.events` | order | `orderId`, `reason` | inventory releases any held stock (and returns stock a late payment committed) |
+| `RefundRequested` | `orders.events` | order | `orderId`, `paymentId` | payment refunds that payment ([ADR 0006](../../docs/adr/0006-refund-late-payments.md)) |
 | `StockReserved` | `inventory.events` | inventory | `orderId`, `items[sku, qty, unitPrice]`, `totalAmount` | order copies the prices ([ADR 0004](../../docs/adr/0004-orders-priced-by-inventory.md)); payment charges `totalAmount` |
 | `StockRejected` | `inventory.events` | inventory | `orderId`, `sku`, `reason` | order cancels |
 | `StockReleased` | `inventory.events` | inventory | `orderId` | — (compensation done) |
 | `PaymentCompleted` | `payments.events` | payment | `orderId`, `paymentId`, `amount` | order confirms; inventory commits the stock |
 | `PaymentFailed` | `payments.events` | payment | `orderId`, `paymentId`, `amount`, `reason` | order cancels; inventory releases the stock |
+| `PaymentRefunded` | `payments.events` | payment | `orderId`, `paymentId`, `amount` | — (the money went back; for the dashboard later) |
 
 The records all implement the sealed `EventPayload`. `EventType` is the catalog (JSON name ↔ record ↔ topic);
 `Topics` holds the topic names as constants.

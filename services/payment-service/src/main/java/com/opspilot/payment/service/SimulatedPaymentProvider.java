@@ -40,11 +40,23 @@ public class SimulatedPaymentProvider implements PaymentProvider {
 
     @Override
     public void charge(UUID orderId, BigDecimal amount) {
-        pause(properties.latency());
-        // With a rate of 0.3, a random number in [0, 1) is below 0.3 in 30% of the charges
-        if (random.getAsDouble() < properties.failureRate()) {
+        if (simulatedCallFails()) {
             throw new PaymentProviderException("Simulated provider failure for order " + orderId);
         }
+    }
+
+    // The same provider: a refund is just as slow as a charge, and fails just as often
+    @Override
+    public void refund(UUID orderId, BigDecimal amount) {
+        if (simulatedCallFails()) {
+            throw new PaymentProviderException("Simulated provider failure refunding order " + orderId);
+        }
+    }
+
+    private boolean simulatedCallFails() {
+        pause(properties.latency());
+        // With a rate of 0.3, a random number in [0, 1) is below 0.3 in 30% of the calls
+        return random.getAsDouble() < properties.failureRate();
     }
 
     private static void pause(Duration latency) {

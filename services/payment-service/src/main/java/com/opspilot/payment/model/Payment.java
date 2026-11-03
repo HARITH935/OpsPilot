@@ -28,7 +28,10 @@ public class Payment {
 
     private String failureReason;
 
-    // A payment never changes once stored. The version is here because a Long that is still null tells Spring Data
+    private Instant refundedAt;   // when the money went back; null unless status is REFUNDED
+
+    // A payment changes at most once after it is stored: a completed one can be refunded. The version protects that
+    // change, so two refunds that race can't both be saved. A Long that is still null also tells Spring Data
     // "this payment is new" → a plain INSERT, without first SELECTing the (random, assigned) id.
     @Version
     private Long version;
@@ -62,6 +65,15 @@ public class Payment {
         return new Payment(orderId, amount, PaymentStatus.FAILED, failureReason);
     }
 
+    // The money goes back to the customer (ADR 0006): COMPLETED → REFUNDED, once
+    public void refund() {
+        if (status != PaymentStatus.COMPLETED) {
+            throw new IllegalStateException("Payment " + id + " is " + status + ", only a COMPLETED payment can be refunded");
+        }
+        this.status = PaymentStatus.REFUNDED;
+        this.refundedAt = Instant.now();
+    }
+
     @PrePersist
     void onCreate() {
         createdAt = Instant.now();
@@ -85,6 +97,10 @@ public class Payment {
 
     public String getFailureReason() {
         return failureReason;
+    }
+
+    public Instant getRefundedAt() {
+        return refundedAt;
     }
 
     public Long getVersion() {

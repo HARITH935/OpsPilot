@@ -73,7 +73,7 @@ class PaymentControllerTest {
 
     @Test
     void listPaymentsRejectsAnUnknownStatus() throws Exception {
-        mockMvc.perform(get("/api/payments").param("status", "REFUNDED"))
+        mockMvc.perform(get("/api/payments").param("status", "PENDING"))   // an order status, not a payment one
                 .andExpect(status().isBadRequest())
                 .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON));
     }
@@ -122,6 +122,6 @@ class PaymentControllerTest {
 
     private static PaymentResponse failedPayment(UUID id) {
         return new PaymentResponse(id, UUID.randomUUID(), new BigDecimal("209.97"), PaymentStatus.FAILED,
-                "PROVIDER_ERROR", Instant.parse("2026-11-01T10:00:00Z"));
+                "PROVIDER_ERROR", Instant.parse("2026-11-01T10:00:00Z"), null);
     }
 }

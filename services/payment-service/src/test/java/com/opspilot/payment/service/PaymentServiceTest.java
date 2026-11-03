@@ -2,6 +2,7 @@ package com.opspilot.payment.service;
 
 import com.opspilot.events.PaymentCompleted;
 import com.opspilot.events.PaymentFailed;
+import com.opspilot.events.PaymentRefunded;
 import com.opspilot.messaging.consumer.ProcessedEvents;
 import com.opspilot.messaging.outbox.OutboxWriter;
 import com.opspilot.payment.dto.PageResponse;
@@ -140,6 +141,57 @@ class PaymentServiceTest {
 
         assertThat(response.id()).isEqualTo(winner.getId());
         verify(outbox, never()).write(any());   // the loser's answer is not sent (the failed insert came first)
+    }
+
+    @Test
+    void aRefundGivesTheStoredAmountBackAndIsAnnounced() {
+        Payment payment = Payment.completed(ORDER, AMOUNT);
+        when(paymentRepository.findById(payment.getId())).thenReturn(Optional.of(payment));
+
+        PaymentResponse response = paymentService.refund(EVENT, payment.getId());
+
+        verify(paymentProvider).refund(ORDER, AMOUNT);   // the amount stored with the payment
+        verify(paymentRepository).saveAndFlush(payment);
+        assertThat(response.status()).isEqualTo(PaymentStatus.REFUNDED);
+        assertThat(response.refundedAt()).isNotNull();
+        verify(outbox).write(new PaymentRefunded(ORDER, payment.getId(), AMOUNT));   // saved with the refund
+    }
+
+    @Test
+    void anAlreadyRefundedPaymentIsNotRefundedAgain() {
+        Payment payment = Payment.completed(ORDER, AMOUNT);
+        payment.refund();
+        when(paymentRepository.findById(payment.getId())).thenReturn(Optional.of(payment));
+
+        PaymentResponse response = paymentService.refund(EVENT, payment.getId());
+
+        assertThat(response.status()).isEqualTo(PaymentStatus.REFUNDED);
+        verifyNoInteractions(paymentProvider, outbox);   // the money goes back once, and is announced once
+        verify(paymentRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void aRefundTheProviderRefusesSavesNothingAndIsLeftToKafkaToRetry() {
+        Payment payment = Payment.completed(ORDER, AMOUNT);
+        when(paymentRepository.findById(payment.getId())).thenReturn(Optional.of(payment));
+        doThrow(new PaymentProviderException("provider down")).when(paymentProvider).refund(ORDER, AMOUNT);
+
+        assertThatThrownBy(() -> paymentService.refund(EVENT, payment.getId()))
+                .isInstanceOf(PaymentProviderException.class);   // up to the Kafka error handler: retry, then DLQ
+
+        verify(paymentRepository, never()).saveAndFlush(any());
+        verifyNoInteractions(processedEvents, outbox);   // the next try starts from scratch
+    }
+
+    @Test
+    void aFailedPaymentIsNeverRefunded() {
+        Payment payment = Payment.failed(ORDER, AMOUNT, "PROVIDER_ERROR");
+        when(paymentRepository.findById(payment.getId())).thenReturn(Optional.of(payment));
+
+        assertThatThrownBy(() -> paymentService.refund(EVENT, payment.getId()))
+                .isInstanceOf(IllegalStateException.class);
+
+        verifyNoInteractions(paymentProvider, outbox);   // refused before the provider is called
     }
 
     @Test

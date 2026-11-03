@@ -72,6 +72,12 @@ public class Product {
         stock -= qty;
     }
 
+    // Units that had left the warehouse come back, e.g. for an order that was cancelled after it was paid
+    public void restock(int qty) {
+        requirePositive(qty);
+        stock += qty;
+    }
+
     private void requireReserved(int qty) {
         requirePositive(qty);
         if (qty > reserved) {

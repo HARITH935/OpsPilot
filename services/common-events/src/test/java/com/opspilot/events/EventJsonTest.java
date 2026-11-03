@@ -28,12 +28,14 @@ class EventJsonTest {
                 new OrderCreated(ORDER, "c-1", List.of(new OrderCreated.Item("SKU-1", 2), new OrderCreated.Item("SKU-2", 1))),
                 new OrderConfirmed(ORDER),
                 new OrderCancelled(ORDER, "PAYMENT_FAILED"),
+                new RefundRequested(ORDER, PAYMENT),
                 new StockReserved(ORDER, List.of(new StockReserved.Item("SKU-1", 2, new BigDecimal("89.99"))),
                         new BigDecimal("179.98")),
                 new StockRejected(ORDER, "SKU-10", "OUT_OF_STOCK"),
                 new StockReleased(ORDER),
                 new PaymentCompleted(ORDER, PAYMENT, new BigDecimal("179.98")),
-                new PaymentFailed(ORDER, PAYMENT, new BigDecimal("179.98"), "PROVIDER_ERROR"));
+                new PaymentFailed(ORDER, PAYMENT, new BigDecimal("179.98"), "PROVIDER_ERROR"),
+                new PaymentRefunded(ORDER, PAYMENT, new BigDecimal("179.98")));
     }
 
     @ParameterizedTest
