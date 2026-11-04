@@ -85,6 +85,8 @@ one ([rate limiting](services/api-gateway/README.md#rate-limiting)). To see it u
 answered from a Redis copy for up to 60 s, deleted as soon as its stock changes ([product cache](services/inventory-service/README.md#product-cache)).
 Each route has its own timeout (2 s → 504), a circuit breaker (503 at once for 30 s after half of the last 20 calls
 failed) and, for GET, up to 3 retries with random waits ([resilience](services/api-gateway/README.md#resilience-timeout-circuit-breaker-retries-per-route)).
+payment-service protects its calls to the payment provider the same way, plus a bulkhead: a failed payment says why
+(`PROVIDER_ERROR`, `PROVIDER_TIMEOUT` or `PROVIDER_UNAVAILABLE`, [details](services/payment-service/README.md#protection-around-the-provider)).
 
 | Service | Port | Try it | Full API |
 |---|---|---|---|
