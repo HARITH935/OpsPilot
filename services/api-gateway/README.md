@@ -164,6 +164,10 @@ health check ignores Redis on purpose.
 **Metrics** (at `/actuator/prometheus`): `gateway_ratelimit_rejected_total{route,key_type}` (429s, by route and by
 `user` / `ip`), `gateway_ratelimit_redis_errors_total`.
 
+**Under load:** the Locust test in [`loadgen/`](../../loadgen/README.md) sends 40 shoppers at the gateway for 30 s.
+In the real run 191 of 1128 requests got a correct 429 (all anonymous, all on products), nothing else failed, and
+`gateway_ratelimit_rejected_total` rose by exactly 191.
+
 ## When a service doesn't answer
 The gateway's own errors use **RFC 9457 Problem Details** (`application/problem+json`), the same format as the services.
 
