@@ -23,9 +23,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-// The whole gateway (real routes, real HTTP client) in front of three fake services on local ports. The read
-// timeout is shortened to 0.5 s, so the "too slow" test doesn't wait 2 s.
-@SpringBootTest(properties = "spring.http.clients.read-timeout=500ms")
+// The whole gateway (real routes, real HTTP client) in front of three fake services on local ports. The products
+// route's timeout is shortened to 0.5 s, so the "too slow" test doesn't wait 2 s.
+@SpringBootTest(properties = "gateway.resilience.timeouts.products=500ms")
 @AutoConfigureMockMvc
 @Import(RedisTestcontainersConfiguration.class)   // the rate limiter needs a Redis
 class GatewayRoutingTest {
@@ -125,7 +125,7 @@ class GatewayRoutingTest {
 
     @Test
     void aServiceThatAnswersTooSlowlyGives504() throws Exception {
-        products.answerAfter(Duration.ofMillis(1500), "{}");   // longer than the 0.5 s read timeout
+        products.answerAfter(Duration.ofMillis(1500), "{}");   // longer than the route's 0.5 s timeout
 
         long start = System.nanoTime();
         mockMvc.perform(get("/api/products/SKU-1"))

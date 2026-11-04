@@ -12,10 +12,11 @@ spring:
       add-mappings: false   # the gateway serves no static files: an unknown path is a plain 404, whatever the method
   http:
     clients:
-      # The HTTP client the gateway uses to call the services. The same limits for every route for now;
-      # per-route timeouts come with the circuit breakers (step 2.11).
+      # The HTTP client the gateway uses to call the services, the same for every route
       connect-timeout: ${GATEWAY_CONNECT_TIMEOUT:1s}   # the service doesn't accept the connection in time → 503
-      read-timeout: ${GATEWAY_READ_TIMEOUT:2s}         # the service accepted, but its answer takes too long → 504
+      # Only a backstop: each route's own timeout (gateway.resilience below) is shorter and answers 504 first.
+      # Keep it longer than every route timeout, or it cuts in first.
+      read-timeout: ${GATEWAY_READ_TIMEOUT:30s}
   data:
     redis:
       # Redis from deploy/docker (or Kubernetes later): only the rate limiter's counters
@@ -35,14 +36,20 @@ spring:
               uri: ${ORDER_SERVICE_URL:http://localhost:8081}
               predicates:
                 - Path=/api/orders/**     # ** = any number of path segments, none included: /api/orders matches too
+              filters:
+                - Resilience=orders       # timeout + circuit breaker + retries for this route (RouteResilience)
             - id: products
               uri: ${INVENTORY_SERVICE_URL:http://localhost:8083}
               predicates:
                 - Path=/api/products/**
+              filters:
+                - Resilience=products
             - id: payments
               uri: ${PAYMENT_SERVICE_URL:http://localhost:8082}
               predicates:
                 - Path=/api/payments/**
+              filters:
+                - Resilience=payments
 
 server:
   port: ${SERVER_PORT:8080}   # env var SERVER_PORT, default 8080
@@ -73,6 +80,24 @@ gateway:
     # Proxies whose X-Forwarded-For header is believed: addresses or CIDR ranges, comma-separated. None by default:
     # locally nothing sits in front of the gateway. In Kubernetes, the Ingress (Phase 4).
     trusted-proxies: ${GATEWAY_TRUSTED_PROXIES:}
+  # Per route: a timeout, a circuit breaker and retries (architecture doc B2.4; RouteResilience)
+  resilience:
+    timeout: 2s                                # for a route not listed below
+    timeouts:                                  # by route id; 504 when the service takes longer
+      orders: ${GATEWAY_ORDERS_TIMEOUT:2s}
+      products: ${GATEWAY_PRODUCTS_TIMEOUT:2s}
+      payments: ${GATEWAY_PAYMENTS_TIMEOUT:2s}
+    circuit-breaker:                           # opens when 50% of the last 20 calls failed
+      failure-rate-threshold: 50
+      sliding-window-size: 20
+      minimum-number-of-calls: 20              # not judged before 20 calls: 1 failure of 1 call is not 100%
+      wait-in-open-state: ${GATEWAY_CIRCUIT_OPEN_FOR:30s}   # refuse every call this long (503), then test
+      permitted-calls-in-half-open-state: 3    # 3 test calls: enough of them fine → CLOSED, too many fail → OPEN again
+    retry:                                     # GET / HEAD that couldn't reach the service, or got 502 / 503
+      max-retries: 3
+      first-wait: 100ms                        # then 200 ms, 400 ms ...
+      multiplier: 2
+      jitter: 0.5                              # ... each one ± 50% at random
 
 management:
   endpoints:

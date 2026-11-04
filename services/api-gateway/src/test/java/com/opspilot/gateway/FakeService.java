@@ -10,7 +10,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 import java.util.TreeMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 
@@ -36,6 +38,7 @@ final class FakeService implements AutoCloseable {
     private final HttpServer server;
     private final List<Received> received = new CopyOnWriteArrayList<>();
     private volatile Reply reply = new Reply(200, "application/json", "{}", Map.of(), Duration.ZERO);
+    private final Queue<Integer> nextStatuses = new ConcurrentLinkedQueue<>();   // answerInTurn: used up first
 
     private FakeService(HttpServer server) {
         this.server = server;
@@ -70,9 +73,16 @@ final class FakeService implements AutoCloseable {
         reply = new Reply(200, "application/json", body, Map.of(), delay);
     }
 
+    // One status per request, in turn (e.g. 503, 503, 200); once they are used up, the last answer set above again
+    void answerInTurn(Integer... statuses) {
+        nextStatuses.clear();
+        nextStatuses.addAll(List.of(statuses));
+    }
+
     // Back to a fresh start between tests: nothing received, answer 200 {}
     void reset() {
         received.clear();
+        nextStatuses.clear();
         reply = new Reply(200, "application/json", "{}", Map.of(), Duration.ZERO);
     }
 
@@ -96,6 +106,10 @@ final class FakeService implements AutoCloseable {
         received.add(new Received(exchange.getRequestMethod(), exchange.getRequestURI().toString(), headers, body));
 
         Reply current = reply;
+        Integer status = nextStatuses.poll();
+        if (status != null) {
+            current = new Reply(status, "application/json", "{\"status\":" + status + "}", Map.of(), Duration.ZERO);
+        }
         try {
             Thread.sleep(current.delay());
         } catch (InterruptedException e) {

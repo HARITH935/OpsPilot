@@ -4,10 +4,12 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
+import java.time.Duration;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 // Settings that must stop the gateway at startup. ApplicationContextRunner starts a tiny Spring context with just
-// the two settings records, so each case takes milliseconds instead of a whole application start.
+// the settings records, so each case takes milliseconds instead of a whole application start.
 class StartupChecksTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
@@ -15,7 +17,14 @@ class StartupChecksTest {
             .withPropertyValues("gateway.jwt.issuer=opspilot-gateway", "gateway.jwt.ttl=30m",
                     "gateway.rate-limit.user.requests=20", "gateway.rate-limit.user.window=1s",
                     "gateway.rate-limit.anonymous.requests=10", "gateway.rate-limit.anonymous.window=1s",
-                    "gateway.rate-limit.login.requests=10", "gateway.rate-limit.login.window=1m");
+                    "gateway.rate-limit.login.requests=10", "gateway.rate-limit.login.window=1m",
+                    "gateway.resilience.timeout=2s", "gateway.resilience.circuit-breaker.failure-rate-threshold=50",
+                    "gateway.resilience.circuit-breaker.sliding-window-size=20",
+                    "gateway.resilience.circuit-breaker.minimum-number-of-calls=20",
+                    "gateway.resilience.circuit-breaker.wait-in-open-state=30s",
+                    "gateway.resilience.circuit-breaker.permitted-calls-in-half-open-state=3",
+                    "gateway.resilience.retry.max-retries=3", "gateway.resilience.retry.first-wait=100ms",
+                    "gateway.resilience.retry.multiplier=2", "gateway.resilience.retry.jitter=0.5");
 
     @Test
     void demoUsersSwitchedOffNeedNoPassword() {
@@ -75,7 +84,36 @@ class StartupChecksTest {
                 .run(context -> assertThat(context.getBean(RateLimitProperties.class).trustedProxies()).isEmpty());
     }
 
-    @EnableConfigurationProperties({JwtProperties.class, DemoUsersProperties.class, RateLimitProperties.class})
+    @Test
+    void aRouteTimeoutOfZeroStopsTheStart() {
+        runner.withPropertyValues("gateway.resilience.timeouts.orders=0s")
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    @Test
+    void aRouteTimeoutIsReadPerRoute() {
+        runner.withPropertyValues("gateway.resilience.timeouts.products=300ms")
+                .run(context -> {
+                    ResilienceProperties resilience = context.getBean(ResilienceProperties.class);
+                    assertThat(resilience.timeoutFor("products")).isEqualTo(Duration.ofMillis(300));
+                    assertThat(resilience.timeoutFor("orders")).isEqualTo(Duration.ofSeconds(2));   // the default
+                });
+    }
+
+    @Test
+    void aFailureThresholdAbove100PercentStopsTheStart() {
+        runner.withPropertyValues("gateway.resilience.circuit-breaker.failure-rate-threshold=150")
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    @Test
+    void jitterAbove100PercentStopsTheStart() {
+        runner.withPropertyValues("gateway.resilience.retry.jitter=1.5")   // a wait can't be more than 100% shorter
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    @EnableConfigurationProperties({JwtProperties.class, DemoUsersProperties.class, RateLimitProperties.class,
+            ResilienceProperties.class})
     static class Settings {
     }
 }
