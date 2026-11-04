@@ -30,8 +30,6 @@ import java.util.UUID;
 @Service
 public class PaymentService {
 
-    static final String PROVIDER_ERROR = "PROVIDER_ERROR";   // failure_reason when the provider fails
-
     private static final Logger log = LoggerFactory.getLogger(PaymentService.class);
 
     private final PaymentRepository paymentRepository;
@@ -133,8 +131,8 @@ public class PaymentService {
             paymentProvider.charge(orderId, amount);
             return Payment.completed(orderId, amount);
         } catch (PaymentProviderException e) {
-            log.warn("Payment for order {} failed: {}", orderId, e.getMessage());
-            return Payment.failed(orderId, amount, PROVIDER_ERROR);
+            log.warn("Payment for order {} failed ({}): {}", orderId, e.reason(), e.getMessage());
+            return Payment.failed(orderId, amount, e.reason());   // PROVIDER_ERROR, _TIMEOUT or _UNAVAILABLE
         }
     }
 

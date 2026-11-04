@@ -15,6 +15,8 @@ import com.opspilot.payment.repository.PaymentRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -97,9 +99,21 @@ class PaymentServiceTest {
         PaymentResponse response = paymentService.charge(EVENT, ORDER, AMOUNT);
 
         assertThat(response.status()).isEqualTo(PaymentStatus.FAILED);
-        assertThat(response.failureReason()).isEqualTo(PaymentService.PROVIDER_ERROR);
+        assertThat(response.failureReason()).isEqualTo("PROVIDER_ERROR");
         verify(paymentRepository).saveAndFlush(any(Payment.class));   // a failure is recorded too
-        verify(outbox).write(new PaymentFailed(ORDER, response.id(), AMOUNT, PaymentService.PROVIDER_ERROR));
+        verify(outbox).write(new PaymentFailed(ORDER, response.id(), AMOUNT, "PROVIDER_ERROR"));
+    }
+
+    @ParameterizedTest   // the reason says why: the saga, the dashboard and the agents can tell these apart
+    @ValueSource(strings = {"PROVIDER_TIMEOUT", "PROVIDER_UNAVAILABLE"})
+    void theProvidersReasonIsStoredWithTheFailedPayment(String reason) {
+        when(paymentRepository.findByOrderId(ORDER)).thenReturn(Optional.empty());
+        doThrow(new PaymentProviderException(reason, "no luck", null)).when(paymentProvider).charge(ORDER, AMOUNT);
+
+        PaymentResponse response = paymentService.charge(EVENT, ORDER, AMOUNT);
+
+        assertThat(response.failureReason()).isEqualTo(reason);
+        verify(outbox).write(new PaymentFailed(ORDER, response.id(), AMOUNT, reason));
     }
 
     @Test

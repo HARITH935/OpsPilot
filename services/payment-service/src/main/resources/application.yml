@@ -30,3 +30,20 @@ payment:
   provider:
     failure-rate: ${PAYMENT_FAILURE_RATE:0.0}   # share of charges that fail: 0.0 = none … 1.0 = all (C12 uses 0.5)
     latency: ${PAYMENT_LATENCY_MS:100}ms        # how long every charge takes
+    # Around every call to the provider (ResilientPaymentProvider, architecture doc B2.4)
+    resilience:
+      timeout: ${PAYMENT_PROVIDER_TIMEOUT:2s}   # no answer in time → PROVIDER_TIMEOUT (not retried)
+      retry:                                    # after PROVIDER_ERROR only ("refused, nothing was taken")
+        max-retries: 2
+        first-wait: 200ms                       # then 400 ms ...
+        multiplier: 2
+        jitter: 0.5                             # ... each one ± 50% at random
+      circuit-breaker:                          # opens when 50% of the last 20 payments failed (after their retries)
+        failure-rate-threshold: 50
+        sliding-window-size: 20
+        minimum-number-of-calls: 20
+        wait-in-open-state: ${PAYMENT_PROVIDER_OPEN_FOR:30s}   # no calls this long (PROVIDER_UNAVAILABLE), then test
+        permitted-calls-in-half-open-state: 3
+      bulkhead:                                 # at most 5 provider calls at once; a 6th waits up to 1 s, then
+        max-concurrent-calls: 5                 # PROVIDER_UNAVAILABLE
+        max-wait: 1s
