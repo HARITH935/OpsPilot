@@ -35,13 +35,14 @@ Prometheus · Grafana · PyTorch · LangGraph · FastAPI · React · TypeScript
 | `dashboard/` | React Command Center |
 | `chaos/` | Chaos scenarios C01–C12 |
 | `loadgen/` | Locust traffic |
+| `e2e/` | End-to-end tests: the whole shop as a black box (pytest) |
 | `evals/` | Benchmark harness + results |
 | `deploy/` | Docker Compose, Helm, Argo CD, k3s |
 | `docs/` | Progress, ADRs, runbooks |
 
 ## Run locally
-Today (Phase 2 in progress): PostgreSQL, Kafka and Redis in Docker, the three services and the API gateway on your machine. Phase 2 connects
-the services through Kafka step by step (the order saga): an order is reserved and priced by inventory, charged by
+Today (Phases 1 and 2 done): PostgreSQL, Kafka and Redis in Docker, the three services and the API gateway on your
+machine. The services talk through Kafka (the order saga): an order is reserved and priced by inventory, charged by
 payment, then confirmed (stock committed), or cancelled (out of stock, or payment failed and the stock released).
 Phase 3 turns all of this into a single `docker compose up`.
 
@@ -101,6 +102,22 @@ Start payment-service with `PAYMENT_FAILURE_RATE=1.0` in front to see the other 
 `PAYMENT_FAILED`, and the stock back on sale. Leave payment-service off and the order is `CANCELLED` with reason
 `TIMEOUT` about 30 s later (the saga timeout), its stock released too. Start payment-service after that: it charges
 the order late, and the money is refunded within about a second (`GET /api/payments?status=REFUNDED`).
+
+**Check it all at once:** the [end-to-end tests](e2e/README.md) start the four services themselves and run the saga
+(confirmed, out of stock, payment failed), a duplicate Kafka event, the circuit breaker and the rate limiter through
+the gateway, in about a minute. Stop your own running services first:
+```bash
+cd e2e && uv sync && JAVA_HOME=/opt/homebrew/opt/openjdk@21 uv run pytest   # any JDK 21
+```
+
+## What Phase 2 can do
+| | Shown by | Result (real runs, 2026-11-04) |
+|---|---|---|
+| A payment fails → the order is cancelled and its stock restored | `e2e/` `test_saga.py` | `CANCELLED PAYMENT_FAILED`, stock exactly as before |
+| The same Kafka event twice → handled once | `e2e/` `test_duplicates.py` | a real `StockReserved` sent again: one payment, nothing changed |
+| Too many requests → 429 with `Retry-After`, counted | [`loadgen/`](loadgen/README.md) (40 shoppers, 30 s) | 1092 requests, 165 × 429, all correct; `gateway_ratelimit_rejected_total` +165 |
+| A service down → its circuit opens, then closes again | `e2e/` `test_resilience.py` | 503 + `Retry-After` in under 0.1 s, closed again once the service is back |
+| A struggling payment provider (50% errors) | [payment-service](services/payment-service/README.md#protection-around-the-provider) | 37 of 40 orders confirmed thanks to retries ([ADR 0007](docs/adr/0007-provider-breaker-judges-payments.md)) |
 
 ## Progress
 See [docs/PROGRESS.md](docs/PROGRESS.md).

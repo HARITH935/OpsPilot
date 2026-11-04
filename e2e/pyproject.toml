@@ -1,0 +1,24 @@
+[project]
+name = "opspilot-e2e"
+version = "0.1.0"
+description = "End-to-end tests: the whole shop (gateway, order, inventory, payment, Kafka, Postgres, Redis) as a black box"
+requires-python = ">=3.11"
+dependencies = []   # only the Python standard library: urllib for HTTP, subprocess for the services and Kafka's tools
+
+[dependency-groups]
+dev = ["pytest>=9.2,<10", "ruff>=0.17,<0.18"]
+
+[tool.uv]
+package = false   # test code and its helpers, not a library to install
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]   # so the tests can import stack.py and shop.py from this folder
+addopts = "-v"
