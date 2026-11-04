@@ -110,6 +110,10 @@ the gateway, in about a minute. Stop your own running services first:
 cd e2e && uv sync && JAVA_HOME=/opt/homebrew/opt/openjdk@21 uv run pytest   # any JDK 21
 ```
 
+**As containers (Phase 3):** one [Dockerfile](services/Dockerfile) builds an image of any of the four services, with no
+JDK or Maven on your machine: `cd services && docker build --build-arg SERVICE=order-service -t opspilot/order-service:dev .`
+Non-root, layered (a code change replaces ~100 kB), for amd64 and arm64. Details: [services/README.md](services/README.md#container-images).
+
 ## What Phase 2 can do
 | | Shown by | Result (real runs, 2026-11-04) |
 |---|---|---|

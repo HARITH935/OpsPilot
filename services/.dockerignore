@@ -1,0 +1,12 @@
+# What `docker build` in services/ never sends to the builder.
+# The Dockerfile copies only poms and src/ folders anyway; this keeps the upload small and secrets out.
+**/target/
+**/*.log
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+.idea/
+**/*.iml
+.vscode/
+**/.DS_Store
