@@ -1,6 +1,8 @@
 package com.opspilot.inventory.model;
 
+import com.opspilot.inventory.service.ProductCacheEvictor;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EntityListeners;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
@@ -9,6 +11,7 @@ import java.math.BigDecimal;
 
 @Entity
 @Table(name = "products")
+@EntityListeners(ProductCacheEvictor.class)   // every write of a product clears its cached copy (after the commit)
 public class Product {
 
     @Id   // the SKU itself is the key (a "natural key"), so there is no generated id

@@ -29,9 +29,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-// Pure unit test: the repository is a Mockito mock, so there is no Spring and no database
+// Pure unit test: the repository and the cache are Mockito mocks, so there is no Spring, no database and no Redis.
+// An unconfigured mock cache answers Optional.empty(): a miss.
 @ExtendWith(MockitoExtension.class)
 class ProductServiceTest {
 
@@ -41,12 +43,15 @@ class ProductServiceTest {
     @Mock
     private ProductRepository productRepository;
 
+    @Mock
+    private ProductCache productCache;
+
     private ProductService productService;
 
     @BeforeEach
     void setUp() {
         // withoutTransaction(): just runs the code — there is no database in this test
-        productService = new ProductService(productRepository, TransactionOperations.withoutTransaction());
+        productService = new ProductService(productRepository, TransactionOperations.withoutTransaction(), productCache);
     }
 
     @Test
@@ -82,6 +87,28 @@ class ProductServiceTest {
         assertThatThrownBy(() -> productService.getProduct("SKU-404"))
                 .isInstanceOf(ProductNotFoundException.class)
                 .hasMessageContaining("SKU-404");
+        verify(productCache, never()).put(any());   // a 404 is not cached
+    }
+
+    @Test
+    void getProductAnswersFromTheCacheWithoutAskingTheDatabase() {
+        ProductResponse cached = new ProductResponse("SKU-1", "Mechanical Keyboard", new BigDecimal("89.99"), 500, 2, 498);
+        when(productCache.get("SKU-1")).thenReturn(Optional.of(cached));
+
+        assertThat(productService.getProduct("SKU-1")).isEqualTo(cached);
+
+        verifyNoInteractions(productRepository);
+        verify(productCache, never()).put(any());
+    }
+
+    @Test
+    void getProductOnACacheMissReadsTheDatabaseAndKeepsACopy() {
+        when(productRepository.findById("SKU-1"))
+                .thenReturn(Optional.of(new Product("SKU-1", "Mechanical Keyboard", new BigDecimal("89.99"), 500)));
+
+        ProductResponse response = productService.getProduct("SKU-1");
+
+        verify(productCache).put(response);
     }
 
     @Test

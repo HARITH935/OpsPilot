@@ -37,7 +37,7 @@ import static org.awaitility.Awaitility.await;
 // plays payment and sends PaymentCompleted / PaymentFailed on payments.events. Kafka and Postgres are real.
 // Same setup as OrderEventsIntegrationTest, so both share one Spring context.
 @SpringBootTest
-@Import({TestcontainersConfiguration.class, KafkaTestcontainersConfiguration.class})
+@Import({TestcontainersConfiguration.class, KafkaTestcontainersConfiguration.class, RedisTestcontainersConfiguration.class})
 class PaymentEventsIntegrationTest {
 
     @Autowired

@@ -60,7 +60,8 @@ cd services && ./mvnw verify && cd ..
 DB_PASSWORD=$(grep '^ORDERS_DB_PASSWORD=' deploy/docker/.env | cut -d= -f2) \
   java -Xmx256m -jar services/order-service/target/order-service-0.0.1-SNAPSHOT.jar
 DB_PASSWORD=$(grep '^INVENTORY_DB_PASSWORD=' deploy/docker/.env | cut -d= -f2) \
-  java -Xmx256m -jar services/inventory-service/target/inventory-service-0.0.1-SNAPSHOT.jar
+  REDIS_PASSWORD=$(grep '^REDIS_PASSWORD=' deploy/docker/.env | cut -d= -f2-) \
+  java -Xmx256m -jar services/inventory-service/target/inventory-service-0.0.1-SNAPSHOT.jar   # Redis: its product cache
 DB_PASSWORD=$(grep '^PAYMENTS_DB_PASSWORD=' deploy/docker/.env | cut -d= -f2) \
   java -Xmx256m -jar services/payment-service/target/payment-service-0.0.1-SNAPSHOT.jar
 
@@ -80,7 +81,8 @@ Reading and ordering are open to everyone. Adding a product needs an ADMIN token
 then send `Authorization: Bearer <token>` ([how](services/api-gateway/README.md#login-and-roles-jwt)).
 Too many requests in a short time get **429** with `Retry-After`: 10 per second per address without a token, 20 with
 one ([rate limiting](services/api-gateway/README.md#rate-limiting)). To see it under load, run the Locust test in
-[`loadgen/`](loadgen/README.md) (needs [uv](https://docs.astral.sh/uv/)).
+[`loadgen/`](loadgen/README.md) (needs [uv](https://docs.astral.sh/uv/)). A product read (`GET /api/products/{sku}`) is
+answered from a Redis copy for up to 60 s, deleted as soon as its stock changes ([product cache](services/inventory-service/README.md#product-cache)).
 
 | Service | Port | Try it | Full API |
 |---|---|---|---|

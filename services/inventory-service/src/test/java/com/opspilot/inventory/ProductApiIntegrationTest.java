@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
@@ -35,7 +36,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 // The catalogue starts with the 10 demo products from the V2 seed migration.
 @SpringBootTest
 @AutoConfigureMockMvc
-@Import({TestcontainersConfiguration.class, KafkaTestcontainersConfiguration.class})
+@Import({TestcontainersConfiguration.class, KafkaTestcontainersConfiguration.class, RedisTestcontainersConfiguration.class})
 class ProductApiIntegrationTest {
 
     @Autowired
@@ -47,9 +48,14 @@ class ProductApiIntegrationTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private StringRedisTemplate redis;
+
     @BeforeEach
     void removeProductsCreatedByTests() {
         jdbcTemplate.update("DELETE FROM products WHERE sku LIKE 'TEST-%'");   // keeps the seeded demo products
+        // Plain SQL goes around the cache's evictor (ProductCacheEvictor), so drop the cached copies as well
+        redis.delete(redis.keys("inventory:product:*"));
     }
 
     @Test

@@ -38,7 +38,7 @@ import static org.awaitility.Awaitility.await;
 // -> StockReserved / StockRejected on inventory.events; OrderCancelled -> release (or return) -> StockReleased.
 // Kafka and Postgres are real (Testcontainers).
 @SpringBootTest
-@Import({TestcontainersConfiguration.class, KafkaTestcontainersConfiguration.class})
+@Import({TestcontainersConfiguration.class, KafkaTestcontainersConfiguration.class, RedisTestcontainersConfiguration.class})
 class OrderEventsIntegrationTest {
 
     @Autowired
