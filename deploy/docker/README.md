@@ -64,14 +64,14 @@ docker exec -it opspilot-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootst
 ```
 
 ## Redis
-One Redis 7 (`redis:7.4.12-alpine`) for the API gateway's **rate-limit counters** (step 2.9) and, from step 2.10,
-inventory's product cache. All of it is short-lived, so Redis keeps it **in memory only** (no snapshots, no
+One Redis 7 (`redis:7.4.12-alpine`) for the API gateway's **rate-limit counters** (`ratelimit:*`, step 2.9) and
+inventory's **product cache** (`inventory:product:v1:*`, step 2.10). All of it is short-lived, so Redis keeps it **in memory only** (no snapshots, no
 append-only file): a restart starts empty, and that is fine. Capped at 64 MB; when full, it drops the least recently
 used keys (`allkeys-lru`). About 10 MB in use.
 
 | Client | Connects to | Password |
 |---|---|---|
-| The gateway on your machine | `localhost:6379` | `REDIS_PASSWORD` from `.env` |
+| The gateway and inventory-service on your machine | `localhost:6379` | `REDIS_PASSWORD` from `.env` |
 | Other containers in this compose file | `redis:6379` | the same |
 
 The port is published on `127.0.0.1` only, and a password is required anyway (`NOAUTH Authentication required`
@@ -80,4 +80,6 @@ without it). Inside the container, `redis-cli` logs in by itself (`REDISCLI_AUTH
 docker exec opspilot-redis redis-cli ping                                   # PONG
 docker exec opspilot-redis redis-cli --scan --pattern 'ratelimit:*'         # the gateway's counters (SCAN never blocks Redis)
 docker exec opspilot-redis redis-cli zcard 'ratelimit:orders:user:demo:admin'   # requests counted in the current window
+docker exec opspilot-redis redis-cli --scan --pattern 'inventory:product:*'  # inventory's cached products
+docker exec opspilot-redis redis-cli ttl 'inventory:product:v1:SKU-1'        # seconds until that copy expires
 ```

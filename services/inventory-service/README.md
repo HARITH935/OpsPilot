@@ -4,15 +4,17 @@ Product catalogue, stock, and stock reservations for the order saga. It reacts t
 reserving the stock and answering `StockReserved` / `StockRejected`, then to the payment result: commit the held stock
 (paid) or release it and answer `StockReleased` (not paid, or the order was cancelled, e.g. by the saga timeout).
 If an order is paid only after the timeout cancelled it, the stock that payment committed comes back too ([ADR 0006](../../docs/adr/0006-refund-late-payments.md)).
-Next (Phase 2): a Redis cache for product reads.
+`GET /api/products/{sku}` is answered from a Redis copy when there is one ([product cache](#product-cache)).
 
 ## Run
-Needs the local Postgres from `deploy/docker` running (see its README).
+Needs the local Postgres from `deploy/docker` running (see its README); Kafka and Redis from there too for the full picture.
 ```bash
 cd services
 export DB_PASSWORD=$(grep '^INVENTORY_DB_PASSWORD=' ../deploy/docker/.env | cut -d= -f2)
+export REDIS_PASSWORD=$(grep '^REDIS_PASSWORD=' ../deploy/docker/.env | cut -d= -f2-)   # the product cache
 ./mvnw -pl inventory-service spring-boot:run   # starts on :8083
 ```
+Without Redis (or without `REDIS_PASSWORD`) it still works: every product is then read from Postgres, with a WARN.
 On startup Flyway applies any new `db/migration/V*.sql` files (the very first start also loads 10 demo products),
 then Hibernate checks the entities match the tables. With Kafka running (also `deploy/docker`) it starts reading
 `orders.events` and `payments.events` where it stopped last time (its very first start reads the topic from the beginning).
@@ -22,8 +24,8 @@ then Hibernate checks the entities match the tables. With Kafka running (also `d
 cd services
 ./mvnw -pl inventory-service verify
 ```
-Needs Docker running: the tests start their own throwaway Postgres, and the full-app tests a throwaway Kafka too
-(Testcontainers), so they never touch the containers in `deploy/docker`.
+Needs Docker running: the tests start their own throwaway Postgres, and the full-app tests a throwaway Kafka and Redis
+too (Testcontainers), so they never touch the containers in `deploy/docker`.
 
 ## API
 | Method + path | Success | Errors |
@@ -96,6 +98,58 @@ docker exec opspilot-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-s
 - **No deadlocks:** `hibernate.order_updates=true` sends UPDATEs sorted by SKU, so every transaction locks products in the same order.
 - Proven by `ReservationIntegrationTest`: 20 orders grab the last 5 units at the same moment → exactly 5 held, 15 rejected, stock never below 0.
 
+## Product cache
+`GET /api/products/{sku}` is the most frequent read (product pages), so inventory keeps a copy of each product in
+Redis: **cache-aside**. `ProductService` asks `ProductCache` first:
+- **hit:** the copy is there → answered from Redis, without a database connection
+- **miss:** not there → read from Postgres, and the answer is kept in Redis for **60 s** (`PRODUCT_CACHE_TTL`)
+
+Key `inventory:product:v1:<sku>`, value = the same JSON the API returns. The `v1` means: if the answer ever changes
+shape, the new version reads new keys and never an old copy. The product list and unknown SKUs (404) are not cached.
+
+**When stock changes, the copy goes.** `ProductCacheEvictor` is a JPA entity listener on `Product`: Hibernate calls it
+on every INSERT, UPDATE or DELETE of a product row (reserve, commit, release, return, a new product). It deletes that
+product's copy **after the transaction commits**. Not earlier: until the commit, the database still shows the old
+values, and a read in between would put them straight back. A rolled-back change deletes nothing.
+`ProductCacheIntegrationTest` checks exactly that race: a read during an uncommitted change caches the old values, and
+the commit removes them.
+
+**Known limits**, each lasting at most the TTL (60 s):
+- A read that misses, then loses the race to a change (the change commits and deletes the copy before the read puts its
+  older answer), leaves an out-of-date copy. This is the classic cache-aside trade-off.
+- Changes made with plain SQL (not through Hibernate) are not seen by the listener.
+- A delete that fails because Redis is down leaves the copy until it expires.
+
+**Fail-open:** if Redis can't be reached, or a copy can't be read, Postgres answers. The shop keeps working, and it
+shows in the log (one WARN at most every 30 s, an INFO when Redis is back) and in `cache_errors_total`. While Redis is
+disconnected, commands are refused at once instead of waiting for the 100 ms timeout (`RedisConfig`). Redis down
+doesn't make inventory unhealthy: its health check ignores Redis on purpose.
+
+**Metrics** (at `/actuator/prometheus`): `cache_requests_total{cache="products",result="hit|miss"}`,
+`cache_errors_total{cache="products",operation="read|write|evict"}`. Hit ratio = hits / (hits + misses).
+
+**From the real run (2026-11-04, MacBook Air M2, all through the local stack):**
+
+| | Cache on | Cache off (`PRODUCT_CACHE_ENABLED=false`) |
+|---|---|---|
+| 2000 reads one at a time, direct to :8083: median / p95 | 0.40–0.60 ms / 1.0–1.7 ms | 0.48–0.74 ms / 0.7–1.4 ms |
+| Database connections taken for 2200 reads | **6** (1 miss + background jobs) | **2203** |
+
+- Locally a single read is **not** faster: a primary-key lookup in a small local Postgres is about as quick as a trip
+  to Redis, and the run-to-run noise is as big as the difference. What the cache saves is **database work**: about
+  2200 fewer queries and connections. That matters once Postgres is busy, remote, or short of connections.
+- 10 Locust shoppers through the gateway for 30 s: hit ratio **72.5%** (90 hits, 34 misses). Each order clears the copies
+  of its products twice (reserve, then commit), so busy products miss more often.
+- An order for SKU-1: its copy was gone about 100 ms later; the next read showed the new stock.
+- `docker stop` Redis: 20 reads all 200 in 0.34 s, readiness `UP`, one WARN, errors counted. `docker start`: copies
+  kept again about 1 s later.
+
+```bash
+docker exec opspilot-redis redis-cli get inventory:product:v1:SKU-1   # the copy (while it exists)
+docker exec opspilot-redis redis-cli ttl inventory:product:v1:SKU-1   # seconds it has left
+curl -s localhost:8083/actuator/prometheus | grep ^cache_
+```
+
 ## Operational endpoints
 | Path | Purpose |
 |---|---|
@@ -112,6 +166,10 @@ docker exec opspilot-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-s
 | `DB_USERNAME` | `inventory_user` | Database login |
 | `DB_PASSWORD` | — (required) | Database password |
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka address (`kafka:19092` from inside Docker) |
+| `REDIS_HOST` / `REDIS_PORT` | `localhost` / `6379` | Redis for the product cache |
+| `REDIS_PASSWORD` | empty | Redis password (`REDIS_PASSWORD` in `deploy/docker/.env`). Wrong or missing → no caching, Postgres answers |
+| `PRODUCT_CACHE_ENABLED` | `true` | `false`: never use Redis, read every product from Postgres |
+| `PRODUCT_CACHE_TTL` | `60s` | How long a copy is kept (1 s … 1 h); also the longest a copy can be out of date. A wrong value stops the start |
 
 ## Database
 Migrations in `src/main/resources/db/migration/`:
@@ -125,4 +183,5 @@ Never edit a merged migration — add the next `V<n>__...sql`.
 ## Packages
 `controller` → `service` → `repository` → database. `dto` = API shapes, `model` = JPA entities,
 `event` = the Kafka listeners (`OrderEventsListener`, `PaymentEventsListener`), `config` = Spring config (`MessagingConfig` turns on the outbox
-and the listener's shared settings), `exception` = error handling.
+and the listener's shared settings; `RedisConfig` + `ProductCacheProperties` for the cache), `exception` = error handling.
+`service` also holds `ProductCache` (the Redis copies) and `ProductCacheEvictor` (deletes a copy when its product changes).

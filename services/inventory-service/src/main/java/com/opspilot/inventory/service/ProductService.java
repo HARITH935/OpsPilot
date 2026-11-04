@@ -23,10 +23,13 @@ public class ProductService {
 
     private final ProductRepository productRepository;
     private final TransactionOperations transactions;
+    private final ProductCache productCache;
 
-    public ProductService(ProductRepository productRepository, TransactionOperations transactions) {
+    public ProductService(ProductRepository productRepository, TransactionOperations transactions,
+                          ProductCache productCache) {
         this.productRepository = productRepository;
         this.transactions = transactions;   // Spring Boot provides a TransactionTemplate: "run this block in a transaction"
+        this.productCache = productCache;
     }
 
     @Transactional(readOnly = true)
@@ -36,11 +39,20 @@ public class ProductService {
         return PageResponse.from(productRepository.findAll(pageable).map(ProductResponse::from));
     }
 
-    @Transactional(readOnly = true)
+    /**
+     * Cache-aside: the Redis copy if there is one, otherwise Postgres (and the answer is kept in Redis for next time).
+     * Deliberately not @Transactional: a cache hit then needs no database connection at all. On a miss, findById
+     * runs in its own short read-only transaction (Spring Data repositories have one built in).
+     * An unknown SKU is not cached: it answers 404 from Postgres every time.
+     */
     public ProductResponse getProduct(String sku) {
-        return productRepository.findById(sku)
-                .map(ProductResponse::from)
-                .orElseThrow(() -> new ProductNotFoundException(sku));
+        return productCache.get(sku).orElseGet(() -> {
+            ProductResponse product = productRepository.findById(sku)
+                    .map(ProductResponse::from)
+                    .orElseThrow(() -> new ProductNotFoundException(sku));
+            productCache.put(product);
+            return product;
+        });
     }
 
     /**

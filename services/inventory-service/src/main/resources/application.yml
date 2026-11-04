@@ -16,6 +16,19 @@ spring:
         order_updates: true
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}   # Kafka from deploy/docker: reads orders.events + payments.events, sends via the outbox
+  data:
+    redis:
+      # Redis from deploy/docker (shared with the gateway, which uses other keys): only the product cache
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 100ms           # a Redis command slower than this counts as a failure → Postgres answers, not a slow shop
+      connect-timeout: 100ms
+
+inventory:
+  product-cache:
+    enabled: ${PRODUCT_CACHE_ENABLED:true}   # false: never use Redis, read every product from Postgres
+    ttl: ${PRODUCT_CACHE_TTL:60s}            # how long a copy is kept (1 s … 1 h); also the most it can be out of date
 
 server:
   port: ${SERVER_PORT:8083}   # env var SERVER_PORT, default 8083
@@ -29,3 +42,6 @@ management:
     health:
       probes:
         enabled: true   # adds /actuator/health/liveness and /readiness (used by Kubernetes probes)
+  health:
+    redis:
+      enabled: false   # Redis down doesn't make inventory unhealthy: the cache fails open (and counts the errors)

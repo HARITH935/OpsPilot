@@ -54,6 +54,11 @@
             <artifactId>common-messaging</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- Redis (Lettuce client): the product cache for GET /api/products/{sku} -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
         <!-- JDBC driver: only needed when the app runs, not to compile it -->
         <dependency>
             <groupId>org.postgresql</groupId>
@@ -86,7 +91,12 @@
             <artifactId>spring-boot-starter-flyway-test</artifactId>
             <scope>test</scope>
         </dependency>
-        <!-- Testcontainers: tests run against a real, throwaway Postgres and Kafka in Docker -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Testcontainers: tests run against a real, throwaway Postgres, Kafka and Redis in Docker -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-testcontainers</artifactId>
