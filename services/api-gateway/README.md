@@ -5,6 +5,7 @@ the path (a **reverse proxy**), then returns that service's answer unchanged. Bu
 Spring MVC version, [ADR 0005](../../docs/adr/0005-phase2-foundations.md)), with routes written in `application.yml`.
 It has no database and no Kafka. It also checks **who is calling**: it issues and verifies JWT login tokens and
 enforces the roles (step 2.8), and it limits **how often**: a sliding-window rate limiter in Redis (step 2.9).
+Each route also protects itself from a slow or broken service: a timeout, a circuit breaker and retries (step 2.11a).
 All of this is done once, here, instead of in every service.
 
 ## Run
@@ -174,16 +175,71 @@ The gateway's own errors use **RFC 9457 Problem Details** (`application/problem+
 | Situation | Status | Body |
 |---|---|---|
 | No route for the path (e.g. `/api/shipments`) | **404** | `{"title":"Not Found","status":404,...}` |
-| The service is down: connection refused, or not accepted within `GATEWAY_CONNECT_TIMEOUT` | **503** | `{"title":"Service unavailable","detail":"The service behind /api/products/SKU-2 can't be reached right now",...}` |
-| The service accepted but didn't answer within `GATEWAY_READ_TIMEOUT` | **504** | `{"title":"Service too slow","detail":"The service behind /api/orders did not answer in time",...}` |
+| The service is down: connection refused, or not accepted within `GATEWAY_CONNECT_TIMEOUT` (after the retries, for GET / HEAD) | **503** | `{"title":"Service unavailable","detail":"The service behind /api/products/SKU-2 can't be reached right now",...}` |
+| The route's circuit breaker is open | **503** + `Retry-After` | `{"title":"Service unavailable","detail":"The service behind /api/products/SKU-2 failed too often just now, so it gets a short break. Try again later.",...}` |
+| The service didn't answer within the route's timeout (`GATEWAY_<ROUTE>_TIMEOUT`) | **504** | `{"title":"Service too slow","detail":"The service behind /api/orders did not answer in time",...}` |
 
 - The reply never names the service's internal address. The gateway log does, with the cause:
   `WARN … GET /api/products/SKU-2 failed (ConnectException): I/O error on GET request for "http://localhost:8083/…"`
-- A refused connection fails at once (about 35 ms), so a stopped service costs callers no waiting.
-- The timeouts are the same for every route for now. Per-route timeouts come with the circuit breakers in step 2.11
-  (Resilience4j), because Gateway MVC 5.0 has no per-route timeout setting.
+- A refused connection fails at once (about 35 ms). With the retries of a GET it's about 0.8–1 s in all.
 - The gateway's own health (`/actuator/health`) stays `UP` while a service is down: restarting the gateway wouldn't
   bring that service back.
+
+## Resilience: timeout, circuit breaker, retries (per route)
+Every route has the filter `Resilience=<route>` in `application.yml` (`RouteResilience`, Resilience4j 2.3).
+From the outside in:
+
+```
+Retry ( CircuitBreaker ( TimeLimiter ( the call to the service ) ) )
+```
+
+**Timeout** (`TimeLimiter`): each route waits at most its own time for an answer, 2 s by default
+(`GATEWAY_ORDERS_TIMEOUT`, `GATEWAY_PRODUCTS_TIMEOUT`, `GATEWAY_PAYMENTS_TIMEOUT`); then **504**. The call runs on a
+virtual thread of its own, so the request can stop waiting at the limit, and the call is interrupted. Gateway MVC
+5.0 has no per-route timeout setting, so this is how routes get different ones. `GATEWAY_READ_TIMEOUT` (30 s) is
+only a backstop: keep it longer than every route timeout.
+
+**Circuit breaker**, one per route, like a fuse:
+
+| State | What happens | Until |
+|---|---|---|
+| `CLOSED` (normal) | calls go through; the last 20 are counted | 50% of them failed (at least 20 calls seen) → `OPEN` |
+| `OPEN` | every call is refused at once (**503** + `Retry-After: 30`), the service isn't called | 30 s passed (`GATEWAY_CIRCUIT_OPEN_FOR`) → `HALF_OPEN` |
+| `HALF_OPEN` | 3 test calls go through | enough of them fine → `CLOSED`; too many fail → `OPEN` again |
+
+- **Failures:** no answer (refused, too slow) and a 5xx answer (500, 502, 503, 504). A 4xx is not: that's the
+  caller's mistake, not the service's. A service's own 5xx answer is still passed on unchanged.
+- An open breaker gives a broken service time to recover, and callers a quick answer instead of a slow one.
+- Every state change is logged (`WARN … Circuit breaker products: CLOSED → OPEN …`, then `INFO` for `HALF_OPEN` and
+  `CLOSED`). Other routes are not affected.
+
+**Retries**, for **GET and HEAD only** (repeating a POST could create a second order):
+- only when the service **couldn't be reached** (refused, connect timeout) or answered **502 / 503** ("can't take
+  it right now"). Not after a 500 ("tried and failed"), not after a timeout (the request may still be running
+  there), not while the breaker is open.
+- up to 3 retries, about 100 → 200 → 400 ms apart, each **± 50% at random** (jitter): clients that failed together
+  don't all come back at the same moment. Every attempt is logged (`INFO … Route products: retry 2 in 195 ms …`).
+- every attempt passes the circuit breaker, so a stopped service fills the breaker's window 4 times as fast, and the
+  breaker opens sooner.
+- Gateway MVC's own `Retry` filter has no jitter, and its `CircuitBreaker` filter turns every other error into a plain
+  500 (a stopped service would no longer be 503) and drops a service's own 5xx answer. So the route filter is our own
+  (`ResilienceFilterFunctions`), registered through a `FilterSupplier` bean.
+
+**Metrics** (at `/actuator/prometheus`), each with `name="<route>"`: `resilience4j_circuitbreaker_state{state}`
+(1 = the current one), `resilience4j_circuitbreaker_calls_seconds_count{kind="successful|failed"}`,
+`resilience4j_circuitbreaker_not_permitted_calls_total`, `resilience4j_circuitbreaker_failure_rate`,
+`resilience4j_retry_calls_total{kind}`, `resilience4j_timelimiter_calls_total{kind="successful|failed|timeout"}`.
+
+**From the real run (2026-11-04):**
+- inventory stopped, one GET every 0.5 s: each was tried 4 times (waits 73 / 195 / 560 ms, 84 / 284 / 543 ms, …)
+  and answered 503 after 0.8–1.0 s. During the 5th request the breaker opened (19 of the last 20 calls failed);
+  from then on 503 + `Retry-After: 30` in 8–24 ms, inventory not called.
+- inventory started: `OPEN → HALF_OPEN` exactly 30 s after opening, 3 test calls 200, `HALF_OPEN → CLOSED`.
+- payments pointed at a fake that answers after 3 s, `GATEWAY_PAYMENTS_TIMEOUT=1s`: 504 after 1.3 s, not retried,
+  while orders answered 200 in 0.3 s.
+- order-service stopped: 21 POSTs, **0 retries**. After 19 failed POSTs (20 calls with one earlier GET that worked) the
+  breaker opened; the last 2 POSTs were refused at once. With `GATEWAY_CIRCUIT_OPEN_FOR=5s`: `HALF_OPEN` 5 s later,
+  `CLOSED` after 3 test calls.
 
 ## HTTP client
 The gateway calls the services with Java's built-in `java.net.http.HttpClient`, chosen by Spring Boot and configured
@@ -207,7 +263,9 @@ HTTP/2 on each request (`Upgrade: h2c`), which the services don't support. Reque
 | `INVENTORY_SERVICE_URL` | `http://localhost:8083` | Where `/api/products/**` goes |
 | `PAYMENT_SERVICE_URL` | `http://localhost:8082` | Where `/api/payments/**` goes |
 | `GATEWAY_CONNECT_TIMEOUT` | `1s` | Longest wait for a service to accept the connection (then 503) |
-| `GATEWAY_READ_TIMEOUT` | `2s` | Longest wait for a service's answer (then 504). With a tiny value even a refused connection runs out of time first and shows as 504 |
+| `GATEWAY_READ_TIMEOUT` | `30s` | Backstop for a service's answer (then 504). The route timeouts below are shorter and decide; keep this one longer than all of them |
+| `GATEWAY_ORDERS_TIMEOUT` / `GATEWAY_PRODUCTS_TIMEOUT` / `GATEWAY_PAYMENTS_TIMEOUT` | `2s` each | Each route's own timeout (then 504); 10 ms – 1 min |
+| `GATEWAY_CIRCUIT_OPEN_FOR` | `30s` | How long an open circuit breaker refuses calls before letting test calls through |
 | `JWT_ISSUER` | `opspilot-gateway` | The `iss` claim; tokens with another issuer are refused |
 | `JWT_TTL` | `30m` | How long a token is valid (1 s – 24 h) |
 | `JWT_PRIVATE_KEY_FILE` / `JWT_PUBLIC_KEY_FILE` | — | PEM files of the signing key pair (both or neither); neither = a temporary key |
@@ -223,14 +281,17 @@ HTTP/2 on each request (`Upgrade: h2c`), which the services don't support. Reque
 
 ## Packages
 - `config`: `HttpClientConfig` (HTTP/1.1), `SecurityConfig` (the rules), `JwtConfig` (the key pair, the token encoder and
-  decoder), `RedisConfig` (fail fast while Redis is down, the Lua script), `JwtProperties` / `DemoUsersProperties` /
-  `RateLimitProperties` (the settings, checked at startup)
-- `filter`: `RateLimitFilter` (runs after Spring Security, before the routes: counts, adds the headers, answers 429)
+  decoder), `RedisConfig` (fail fast while Redis is down, the Lua script), `ResilienceConfig` (the circuit breakers,
+  time limiters and retries, their metrics and log lines), `JwtProperties` / `DemoUsersProperties` /
+  `RateLimitProperties` / `ResilienceProperties` (the settings, checked at startup)
+- `filter`: `RateLimitFilter` (runs after Spring Security, before the routes: counts, adds the headers, answers 429),
+  `RouteResilience` (timeout + circuit breaker + retries around each route's call), `ResilienceFilterFunctions`
+  (makes it the `Resilience` filter in `application.yml`)
 - `controller`: `AuthController` (`POST /auth/token`), `JwksController` (the public key)
 - `service`: `TokenService` (makes signed tokens), `DemoUsers` (the three demo logins), `SlidingWindowRateLimiter`
   (runs the Lua script), `ClientIpResolver` (whose IP is it)
 - `dto`: `TokenRequest` / `TokenResponse`
-- `exception`: `GatewayExceptionHandler` (503 / 504, failed login), `SecurityProblemHandler` (401 / 403),
+- `exception`: `GatewayExceptionHandler` (503 / 504, open circuit, route timeout, failed login), `SecurityProblemHandler` (401 / 403),
   `ProblemResponses` (writes a Problem Details body from code that runs before Spring MVC)
 
 The routes are not code: they are in `src/main/resources/application.yml`.

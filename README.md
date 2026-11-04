@@ -83,6 +83,8 @@ Too many requests in a short time get **429** with `Retry-After`: 10 per second 
 one ([rate limiting](services/api-gateway/README.md#rate-limiting)). To see it under load, run the Locust test in
 [`loadgen/`](loadgen/README.md) (needs [uv](https://docs.astral.sh/uv/)). A product read (`GET /api/products/{sku}`) is
 answered from a Redis copy for up to 60 s, deleted as soon as its stock changes ([product cache](services/inventory-service/README.md#product-cache)).
+Each route has its own timeout (2 s → 504), a circuit breaker (503 at once for 30 s after half of the last 20 calls
+failed) and, for GET, up to 3 retries with random waits ([resilience](services/api-gateway/README.md#resilience-timeout-circuit-breaker-retries-per-route)).
 
 | Service | Port | Try it | Full API |
 |---|---|---|---|
