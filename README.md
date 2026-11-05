@@ -5,6 +5,9 @@
 
 **Live demo:** _coming in Phase 5_ · **Results:** _coming in Phase 13_
 
+[![ci-java](https://github.com/HARITH935/OpsPilot/actions/workflows/ci-java.yml/badge.svg?branch=main)](https://github.com/HARITH935/OpsPilot/actions/workflows/ci-java.yml)
+[![ci-python](https://github.com/HARITH935/OpsPilot/actions/workflows/ci-python.yml/badge.svg?branch=main)](https://github.com/HARITH935/OpsPilot/actions/workflows/ci-python.yml)
+
 ---
 
 ## The problem
@@ -135,6 +138,17 @@ Non-root, layered (a code change replaces ~100 kB), for amd64 and arm64. Details
 | Too many requests → 429 with `Retry-After`, counted | [`loadgen/`](loadgen/README.md) (40 shoppers, 30 s) | 1092 requests, 165 × 429, all correct; `gateway_ratelimit_rejected_total` +165 |
 | A service down → its circuit opens, then closes again | `e2e/` `test_resilience.py` | 503 + `Retry-After` in under 0.1 s, closed again once the service is back |
 | A struggling payment provider (50% errors) | [payment-service](services/payment-service/README.md#protection-around-the-provider) | 37 of 40 orders confirmed thanks to retries ([ADR 0007](docs/adr/0007-provider-breaker-judges-payments.md)) |
+
+## Checks on every pull request (CI)
+GitHub Actions runs these on every PR to `main` and every push to `main`; a PR can only be merged when they pass:
+| Check | Runs | When |
+|---|---|---|
+| `java-verify` ([ci-java.yml](.github/workflows/ci-java.yml)) | `./mvnw verify` in `services/`: all modules, all tests (Testcontainers on the runner's Docker) | `services/` changed |
+| `python-loadgen` ([ci-python.yml](.github/workflows/ci-python.yml)) | `ruff check`, `ruff format --check`, `pytest` in `loadgen/` | `loadgen/` changed |
+| `python-e2e` ([ci-python.yml](.github/workflows/ci-python.yml)) | `ruff check`, `ruff format --check` in `e2e/` | `e2e/` changed |
+
+A check whose folder didn't change is *skipped*, which counts as passed, so a docs-only PR isn't held up. Pushes to
+`main` always run everything. The workflows may only read the repo, and every action is pinned to a full commit.
 
 ## Progress
 See [docs/PROGRESS.md](docs/PROGRESS.md).
