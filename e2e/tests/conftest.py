@@ -7,7 +7,7 @@ from stack import LOGS, Stack, StackError
 
 @pytest.fixture(scope="session")
 def stack() -> Iterator[Stack]:
-    """The four services, started once for the whole run and stopped at the end, whatever happens."""
+    """The four services, started once for the whole run and removed at the end, whatever happens."""
     services = Stack()
     try:
         services.check_ready_to_start()
