@@ -102,6 +102,18 @@ class GatewayRoutingTest {
     }
 
     @Test
+    void aGetWithoutABodyIsPassedOnWithoutOne() throws Exception {
+        mockMvc.perform(get("/api/orders/1")).andExpect(status().isOk());
+
+        // As the real gateway does it (measured in step 3.4): no streamed, empty body behind a GET.
+        // MockMvc needs BodylessRequestsLikeTomcat for this; without it, Java's HTTP client sometimes crashes here.
+        FakeService.Received sent = orders.lastReceived();
+        assertThat(sent.header("Transfer-Encoding")).isNull();
+        assertThat(sent.header("Content-Length")).isNull();
+        assertThat(sent.body()).isEmpty();
+    }
+
+    @Test
     void anErrorFromTheServiceComesBackUnchanged() throws Exception {
         String problem = "{\"title\":\"Order not found\",\"status\":404}";
         orders.answer(404, "application/problem+json", problem, Map.of());

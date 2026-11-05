@@ -153,7 +153,9 @@ class ResilienceIntegrationTest {
                 .andExpect(header().string("Retry-After", "1"))   // the 1 s wait of this test (30 s normally)
                 .andExpect(jsonPath("$.title").value("Service unavailable"))
                 .andExpect(jsonPath("$.detail").value(containsString("failed too often just now")));
-        assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofMillis(100));
+        // Refused without waiting: far under the 2 s a call may take. (100 ms was too tight on a busy Linux machine:
+        // 2 of 10 runs, step 3.4.) The real proof that the service wasn't asked is the count just below.
+        assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofSeconds(1));
         assertThat(orders.received()).hasSize(20);   // the 21st never reached the service
 
         mockMvc.perform(get("/api/products/SKU-1")).andExpect(status().isOk());   // other routes are not affected
