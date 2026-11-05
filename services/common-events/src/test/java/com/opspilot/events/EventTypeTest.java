@@ -23,7 +23,7 @@ class EventTypeTest {
                     .as("catalog entries for %s", record.getSimpleName())
                     .hasSize(1);
         }
-        assertThat(EventType.values()).hasSameSizeAs(records);
+        assertThat(EventType.values()).hasSize(999);   // DELIBERATELY WRONG: checks that CI blocks the merge
     }
 
     @Test
