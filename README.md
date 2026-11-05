@@ -115,11 +115,12 @@ Start payment-service with `PAYMENT_FAILURE_RATE=1.0` in front to see the other 
 `TIMEOUT` about 30 s later (the saga timeout), its stock released too. Start payment-service after that: it charges
 the order late, and the money is refunded within about a second (`GET /api/payments?status=REFUNDED`).
 
-**Check it all at once:** the [end-to-end tests](e2e/README.md) start the four services themselves and run the saga
-(confirmed, out of stock, payment failed), a duplicate Kafka event, the circuit breaker and the rate limiter through
-the gateway, in about a minute. Stop your own running services first:
+**Check it all at once:** the [end-to-end tests](e2e/README.md) start the shop in Docker (the same images as the quick
+way, built from the current code) and run the saga (confirmed, out of stock, payment failed), a duplicate Kafka event,
+the circuit breaker and the rate limiter through the gateway, in about 1.5–2 minutes. Needs only Docker and
+[uv](https://docs.astral.sh/uv/); stop your own running services or the shop first:
 ```bash
-cd e2e && uv sync && JAVA_HOME=/opt/homebrew/opt/openjdk@21 uv run pytest   # any JDK 21
+cd e2e && uv sync && uv run pytest
 ```
 
 **Images (Phase 3):** one [Dockerfile](services/Dockerfile) builds an image of any of the four services, with no

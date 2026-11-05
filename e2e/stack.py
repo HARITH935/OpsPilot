@@ -1,8 +1,10 @@
-"""Starts and stops the four Java services for the end-to-end tests.
+"""Starts and stops the shop for the end-to-end tests, with Docker Compose.
 
-They run as the same jars as in the root README ("Run locally"), against the Postgres, Kafka and Redis containers of
-deploy/docker. Passwords are read from deploy/docker/.env and handed to the services, never printed. Every service
-writes its log to e2e/logs/<service>.log (new on every start), so a failing test can be looked into.
+The four services run as containers from the same images as the whole shop in deploy/docker (profile "apps",
+step 3.2), built from the current code by `docker compose up --build`. Postgres, Kafka and Redis are started too if
+they aren't running yet. Compose reads the passwords from deploy/docker/.env itself: this file never sees them.
+At the end the four containers' logs are saved to e2e/logs/<service>.log and the containers are removed;
+Postgres, Kafka and Redis keep running.
 """
 
 import os
@@ -10,66 +12,46 @@ import re
 import socket
 import subprocess
 import time
-import urllib.error
-import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+COMPOSE_FILE = REPO / "deploy" / "docker" / "docker-compose.yml"
 ENV_FILE = REPO / "deploy" / "docker" / ".env"
 LOGS = Path(__file__).resolve().parent / "logs"
-CONTAINERS = ("opspilot-postgres", "opspilot-kafka", "opspilot-redis")
-ORDER_PORT = int(os.environ.get("E2E_ORDER_PORT", "18081"))  # not 8081: often taken by other dev tools (e.g. Expo)
+# Settings for the whole run, so a value left in your shell can't change the tests. A test changes more for one
+# service with restart(), e.g. PAYMENT_FAILURE_RATE="1.0".
+SETTINGS = {
+    "PAYMENT_FAILURE_RATE": "0.0",  # a healthy payment provider
+    "PAYMENT_LATENCY_MS": "100",
+    "GATEWAY_CIRCUIT_OPEN_FOR": "5s",  # an open circuit tests again after 5 s, not 30: shorter tests
+}
 
 
 class StackError(RuntimeError):
-    """Something outside the tests is not ready: no Docker stack, no jar, a port in use, the wrong Java."""
+    """Something outside the tests is not ready: Docker not running, no .env, a port in use, a container unhealthy."""
 
 
 @dataclass
 class Service:
-    name: str
-    port: int
-    heap: str
-    env: dict[str, str]  # its settings; overrides given to start() win
+    name: str  # the service in docker-compose.yml, e.g. "payment-service"
+    port: int  # where it answers on this machine
     kafka_listeners: int  # how many Kafka listeners must get their partitions before it counts as ready
-    process: subprocess.Popen | None = field(default=None, repr=False)
 
     @property
-    def jar(self) -> Path:
-        return REPO / "services" / self.name / "target" / f"{self.name}-0.0.1-SNAPSHOT.jar"
-
-    @property
-    def log_path(self) -> Path:
-        return LOGS / f"{self.name}.log"
-
-    def start(self, java: str, overrides: dict[str, str] | None = None) -> None:
-        LOGS.mkdir(exist_ok=True)
-        env = os.environ | self.env | (overrides or {})
-        with self.log_path.open("w") as log:  # the child keeps its own copy of the file handle
-            self.process = subprocess.Popen(
-                [java, f"-Xmx{self.heap}", "-jar", str(self.jar)],
-                env=env,
-                cwd=REPO,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-            )
-        self._wait_until_ready()
-
-    def stop(self) -> None:
-        """A normal shutdown (SIGTERM), so Kafka consumers leave their group at once: no rebalance stall."""
-        if self.process is None or self.process.poll() is not None:
-            return
-        self.process.terminate()
-        try:
-            self.process.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            self.process.kill()
-            self.process.wait()
-        self.process = None
+    def container(self) -> str:
+        return f"opspilot-{self.name}"
 
     def log(self) -> str:
-        return self.log_path.read_text(errors="replace") if self.log_path.exists() else ""
+        """Everything this container has logged. Every start makes a new container, so: this start only."""
+        result = subprocess.run(
+            ["docker", "logs", self.container],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # one stream, in order
+            text=True,
+            errors="replace",
+        )
+        return result.stdout if result.returncode == 0 else ""
 
     def wait_for_log(self, pattern: str, after: int = 0, timeout: float = 15) -> str:
         """The first log line matching the regex `pattern`, looking only past character `after` of the log."""
@@ -79,144 +61,92 @@ class Service:
             if match:
                 return match.group(0)
             time.sleep(0.2)
-        raise AssertionError(f"{self.name}: no log line matching {pattern!r} within {timeout} s (see {self.log_path})")
+        raise AssertionError(f"{self.name}: no log line matching {pattern!r} within {timeout} s")
 
-    def _wait_until_ready(self, timeout: float = 90) -> None:
-        url = f"http://localhost:{self.port}/actuator/health/readiness"
+    def wait_for_kafka(self, timeout: float = 90) -> None:
+        """Healthy means ready for HTTP. An event sent before the Kafka listeners have their partitions would wait."""
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if self.process is not None and self.process.poll() is not None:
-                raise StackError(f"{self.name} stopped while starting (see {self.log_path})")
-            try:
-                with urllib.request.urlopen(url, timeout=2) as answer:
-                    if answer.status == 200:
-                        break
-            except (urllib.error.URLError, ConnectionError, TimeoutError):
-                pass
-            time.sleep(0.5)
-        else:
-            raise StackError(f"{self.name} not ready within {timeout} s (see {self.log_path})")
-        # Ready for HTTP is not enough: an event sent before its Kafka listeners have their partitions would wait
         while len(re.findall(r"partitions assigned: \[\S", self.log())) < self.kafka_listeners:
             if time.monotonic() > deadline:
                 raise StackError(f"{self.name}: Kafka listeners got no partitions within {timeout} s")
             time.sleep(0.2)
+
+    def save_log(self) -> None:
+        LOGS.mkdir(exist_ok=True)
+        (LOGS / f"{self.name}.log").write_text(self.log())
 
 
 class Stack:
     """The four services, as the tests need them."""
 
     def __init__(self) -> None:
-        secrets = read_env_file()
-        self.java = find_java_21()
-        redis = {"REDIS_PASSWORD": secrets["REDIS_PASSWORD"]}
         self.services = {
-            "order": Service(
-                "order-service",
-                ORDER_PORT,
-                "256m",
-                kafka_listeners=2,
-                env={"SERVER_PORT": str(ORDER_PORT), "DB_PASSWORD": secrets["ORDERS_DB_PASSWORD"]},
-            ),
-            "inventory": Service(
-                "inventory-service",
-                8083,
-                "256m",
-                kafka_listeners=2,
-                env={"DB_PASSWORD": secrets["INVENTORY_DB_PASSWORD"], **redis},
-            ),
-            "payment": Service(
-                "payment-service",
-                8082,
-                "256m",
-                kafka_listeners=2,
-                env={
-                    "DB_PASSWORD": secrets["PAYMENTS_DB_PASSWORD"],
-                    # A healthy provider, unless a test restarts it with other values
-                    "PAYMENT_FAILURE_RATE": "0.0",
-                    "PAYMENT_LATENCY_MS": "100",
-                },
-            ),
-            "gateway": Service(
-                "api-gateway",
-                8080,
-                "128m",
-                kafka_listeners=0,
-                env={
-                    "ORDER_SERVICE_URL": f"http://localhost:{ORDER_PORT}",
-                    "DEMO_USERS_ENABLED": "true",
-                    "DEMO_USERS_PASSWORD": secrets["DEMO_USERS_PASSWORD"],
-                    **redis,
-                    "RATE_LIMIT_ENABLED": "true",
-                    "GATEWAY_CIRCUIT_OPEN_FOR": "5s",
-                },
-            ),  # an open circuit tests again after 5 s, not 30: shorter tests
+            "order": Service("order-service", 18081, kafka_listeners=2),
+            "inventory": Service("inventory-service", 8083, kafka_listeners=2),
+            "payment": Service("payment-service", 8082, kafka_listeners=2),
+            "gateway": Service("api-gateway", 8080, kafka_listeners=0),
         }
 
     def __getitem__(self, name: str) -> Service:
         return self.services[name]
 
     def check_ready_to_start(self) -> None:
-        for container in CONTAINERS:
-            health = subprocess.run(
-                ["docker", "inspect", "-f", "{{.State.Health.Status}}", container], capture_output=True, text=True
-            ).stdout.strip()
-            if health != "healthy":
-                raise StackError(
-                    f"Container {container} is {health or 'missing'}: start the stack first "
-                    "(docker compose -f deploy/docker/docker-compose.yml up -d)"
-                )
+        if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
+            raise StackError("Docker isn't running: start Docker Desktop first")
+        if not ENV_FILE.exists():
+            raise StackError(f"{ENV_FILE} is missing: cp deploy/docker/.env.example deploy/docker/.env and fill it in")
         for service in self.services.values():
-            if not service.jar.exists():
-                raise StackError(f"{service.jar} is missing: build first (cd services && ./mvnw -DskipTests package)")
             if port_in_use(service.port):
-                raise StackError(f"Port {service.port} is in use: stop whatever runs there ({service.name}?) first")
+                raise StackError(
+                    f"Port {service.port} is in use: stop whatever runs there first (your own {service.name}, or "
+                    "the shop: docker compose -f deploy/docker/docker-compose.yml --profile apps down)"
+                )
 
     def start_all(self) -> None:
-        for service in self.services.values():  # in this order: the gateway last, the services it calls first
-            service.start(self.java)
+        """Builds the images from the current code and starts the four (and Postgres, Kafka, Redis if needed)."""
+        names = [s.name for s in self.services.values()]
+        # --force-recreate: new containers, so no log from an earlier run; --wait: until all are healthy
+        compose("up", "--detach", "--build", "--force-recreate", "--wait", "--wait-timeout", "180", *names)
+        for service in self.services.values():
+            service.wait_for_kafka()
 
-    def restart(self, name: str, **overrides: str) -> None:
-        """Restarts one service, with settings changed for this start only (e.g. PAYMENT_FAILURE_RATE="1.0")."""
-        self.services[name].stop()
-        self.services[name].start(self.java, overrides)
+    def restart(self, name: str, **settings: str) -> None:
+        """Starts one service in a new container, with settings changed for this start only."""
+        self.start(name, **settings)
 
     def stop(self, name: str) -> None:
-        self.services[name].stop()
+        compose("stop", self.services[name].name)
 
-    def start(self, name: str) -> None:
-        self.services[name].start(self.java)
+    def start(self, name: str, **settings: str) -> None:
+        service = self.services[name]
+        # --no-deps: leave everything else alone (and don't re-run kafka-init, ~10 s)
+        compose(
+            "up",
+            "--detach",
+            "--no-deps",
+            "--force-recreate",
+            "--wait",
+            "--wait-timeout",
+            "120",
+            service.name,
+            settings=settings,
+        )
+        service.wait_for_kafka()
 
     def stop_all(self) -> None:
-        for service in reversed(self.services.values()):
-            service.stop()
+        for service in self.services.values():
+            service.save_log()
+        compose("rm", "--stop", "--force", *[s.name for s in self.services.values()])
 
 
-def read_env_file() -> dict[str, str]:
-    if not ENV_FILE.exists():
-        raise StackError(f"{ENV_FILE} is missing: cp deploy/docker/.env.example deploy/docker/.env and fill it in")
-    values = {}
-    for line in ENV_FILE.read_text().splitlines():
-        if "=" in line and not line.lstrip().startswith("#"):
-            key, value = line.split("=", 1)
-            values[key.strip()] = value.strip()
-    return values
-
-
-def find_java_21() -> str:
-    """$JAVA_HOME/bin/java if JAVA_HOME is set, else `java` from PATH; it must be Java 21 or newer."""
-    java = str(Path(os.environ["JAVA_HOME"]) / "bin" / "java") if "JAVA_HOME" in os.environ else "java"
-    try:
-        version = subprocess.run([java, "-version"], capture_output=True, text=True).stderr
-    except FileNotFoundError as e:
-        raise StackError(f"No Java found ({java}): install JDK 21 or set JAVA_HOME") from e
-    match = re.search(r'version "(\d+)', version)
-    if not match or int(match.group(1)) < 21:
-        raise StackError(
-            f"{java} is not Java 21+ ({version.splitlines()[0] if version else '?'}): "
-            "set JAVA_HOME to a JDK 21, e.g. JAVA_HOME=/opt/homebrew/opt/openjdk@21"
-        )
-    return java
+def compose(*args: str, settings: dict[str, str] | None = None) -> None:
+    """Runs `docker compose` on the shop's file, profile apps, with the run's settings (+ `settings`)."""
+    command = ["docker", "compose", "-f", str(COMPOSE_FILE), "--profile", "apps", *args]
+    env = os.environ | SETTINGS | (settings or {})
+    result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=600)
+    if result.returncode != 0:
+        last_lines = "\n".join((result.stdout + result.stderr).strip().splitlines()[-15:])
+        raise StackError(f"docker compose {' '.join(args)} failed:\n{last_lines}")
 
 
 def port_in_use(port: int) -> bool:
