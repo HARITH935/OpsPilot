@@ -41,12 +41,24 @@ Prometheus · Grafana · PyTorch · LangGraph · FastAPI · React · TypeScript
 | `docs/` | Progress, ADRs, runbooks |
 
 ## Run locally
-Today (Phases 1 and 2 done): PostgreSQL, Kafka and Redis in Docker, the three services and the API gateway on your
-machine. The services talk through Kafka (the order saga): an order is reserved and priced by inventory, charged by
+Today (Phases 1 and 2 done, Phase 3 in progress): the three services and the API gateway, with PostgreSQL, Kafka and
+Redis. The services talk through Kafka (the order saga): an order is reserved and priced by inventory, charged by
 payment, then confirmed (stock committed), or cancelled (out of stock, or payment failed and the stock released).
-Phase 3 turns all of this into a single `docker compose up`.
 
-**You need:** JDK 21 and Docker Desktop (running).
+### The quick way: everything in Docker
+**You need:** Docker Desktop (running). No JDK.
+```bash
+cp -n deploy/docker/.env.example deploy/docker/.env   # then replace every change-me with your own passwords
+docker compose -f deploy/docker/docker-compose.yml --profile apps up -d --build --wait   # ~1 min the first time
+curl 'localhost:8080/api/products?size=3'             # the shop's front door
+docker compose -f deploy/docker/docker-compose.yml --profile apps down                   # stop (keeps the data)
+```
+This builds the four service images and starts them with Postgres, Kafka and Redis, each one only after what it
+needs is healthy (about 1.6 GB of memory). Details, ports and settings: [deploy/docker](deploy/docker/README.md#the-shop-profile-apps).
+
+### The developer way: services on your machine
+**You need:** JDK 21 and Docker Desktop (running). Docker runs only Postgres, Kafka and Redis (no profile); stop the
+shop above first, or each service runs twice.
 
 ```bash
 # 1. Postgres, Kafka and Redis: copy the template, fill in your own passwords, start them (Kafka's topics are created for you)
@@ -110,7 +122,7 @@ the gateway, in about a minute. Stop your own running services first:
 cd e2e && uv sync && JAVA_HOME=/opt/homebrew/opt/openjdk@21 uv run pytest   # any JDK 21
 ```
 
-**As containers (Phase 3):** one [Dockerfile](services/Dockerfile) builds an image of any of the four services, with no
+**Images (Phase 3):** one [Dockerfile](services/Dockerfile) builds an image of any of the four services, with no
 JDK or Maven on your machine: `cd services && docker build --build-arg SERVICE=order-service -t opspilot/order-service:dev .`
 Non-root, layered (a code change replaces ~100 kB), for amd64 and arm64. Details: [services/README.md](services/README.md#container-images).
 

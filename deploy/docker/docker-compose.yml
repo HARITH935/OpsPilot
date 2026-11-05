@@ -1,7 +1,35 @@
-# Local development stack: PostgreSQL, Kafka, Redis. Run from the repo root:
-#   docker compose -f deploy/docker/docker-compose.yml up -d
+# Local development stack. Run from the repo root:
+#   docker compose -f deploy/docker/docker-compose.yml up -d                           PostgreSQL, Kafka, Redis
+#   docker compose -f deploy/docker/docker-compose.yml --profile apps up -d --build    ... + the four services = the shop
 # Secrets come from deploy/docker/.env (copy .env.example; never commit .env).
 name: opspilot
+
+# ── Shared settings of the four Java services ────────────────────────────────────────────────────────────────────────
+# "x-" blocks are ignored by Compose itself; they only hold YAML anchors (&name), pasted below with "<<: *name".
+x-java-service: &java-service
+  profiles: ["apps"]   # only with --profile apps: a plain `up` stays Postgres + Kafka + Redis
+  # Always build from services/Dockerfile, never download: without this, Compose first tries to pull
+  # "opspilot/<service>" from Docker Hub, where anyone could publish an image under that name.
+  pull_policy: build
+  read_only: true      # nothing in the container can be written...
+  tmpfs:
+    - /tmp             # ...except /tmp, kept in memory (Tomcat and Java write temporary files there)
+  cap_drop: [ALL]      # no Linux capabilities (special root powers); a Java service on a port > 1024 needs none
+  security_opt:
+    - no-new-privileges:true   # no program inside can gain more rights than it started with
+  restart: unless-stopped
+  deploy:
+    resources:
+      limits:
+        memory: 512M   # the JVM takes up to half as heap (MaxRAMPercentage=50 in the Dockerfile); measured use 240–330 MB
+
+# Ready = the service's readiness endpoint answers UP (curl is in the image)
+x-java-healthcheck: &java-healthcheck
+  start_period: 90s
+  start_interval: 2s   # check often while it starts...
+  interval: 15s        # ...then calmly
+  timeout: 3s
+  retries: 3
 
 services:
   postgres:
@@ -121,6 +149,124 @@ services:
         limits:
           memory: 128M   # Redis is capped at 64 MB of data above; the rest is headroom
     restart: unless-stopped
+
+  # ── The shop: the four services, built from services/Dockerfile (step 3.1, ADR 0008) ──────────────────────────────
+  # Inside this network they reach the others by service name (postgres:5432, kafka:19092, redis:6379, order-service:8081).
+  # Ports are published on 127.0.0.1 only. A few settings can be changed for one start from the shell, e.g.
+  #   PAYMENT_FAILURE_RATE=1.0 docker compose -f deploy/docker/docker-compose.yml --profile apps up -d payment-service
+  order-service:
+    <<: *java-service
+    image: opspilot/order-service:dev
+    build:
+      context: ../../services   # relative to this file
+      args:
+        SERVICE: order-service
+    container_name: opspilot-order-service
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/orders
+      DB_PASSWORD: ${ORDERS_DB_PASSWORD:?set ORDERS_DB_PASSWORD in deploy/docker/.env}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092   # Kafka's listener for other containers
+    ports:
+      - "127.0.0.1:18081:8081"   # 18081 on this machine: 8081 is often taken by other dev tools (e.g. Expo)
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully   # the topics exist
+    healthcheck:
+      <<: *java-healthcheck
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8081/actuator/health/readiness"]
+
+  inventory-service:
+    <<: *java-service
+    image: opspilot/inventory-service:dev
+    build:
+      context: ../../services
+      args:
+        SERVICE: inventory-service
+    container_name: opspilot-inventory-service
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/inventory
+      DB_PASSWORD: ${INVENTORY_DB_PASSWORD:?set INVENTORY_DB_PASSWORD in deploy/docker/.env}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      REDIS_HOST: redis   # its product cache
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in deploy/docker/.env}
+    ports:
+      - "127.0.0.1:8083:8083"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      <<: *java-healthcheck
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8083/actuator/health/readiness"]
+
+  payment-service:
+    <<: *java-service
+    image: opspilot/payment-service:dev
+    build:
+      context: ../../services
+      args:
+        SERVICE: payment-service
+    container_name: opspilot-payment-service
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/payments
+      DB_PASSWORD: ${PAYMENTS_DB_PASSWORD:?set PAYMENTS_DB_PASSWORD in deploy/docker/.env}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      # The simulated payment provider: healthy unless set otherwise for one start (chaos scenario C12 uses 0.5)
+      PAYMENT_FAILURE_RATE: ${PAYMENT_FAILURE_RATE:-0.0}
+      PAYMENT_LATENCY_MS: ${PAYMENT_LATENCY_MS:-100}
+    ports:
+      - "127.0.0.1:8082:8082"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    healthcheck:
+      <<: *java-healthcheck
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8082/actuator/health/readiness"]
+
+  api-gateway:
+    <<: *java-service
+    image: opspilot/api-gateway:dev
+    build:
+      context: ../../services
+      args:
+        SERVICE: api-gateway
+    container_name: opspilot-api-gateway
+    environment:
+      ORDER_SERVICE_URL: http://order-service:8081
+      INVENTORY_SERVICE_URL: http://inventory-service:8083
+      PAYMENT_SERVICE_URL: http://payment-service:8082
+      REDIS_HOST: redis   # rate-limit counters
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in deploy/docker/.env}
+      # Demo logins viewer / engineer / admin (POST /auth/token): local only, never in the cloud
+      DEMO_USERS_ENABLED: "true"
+      DEMO_USERS_PASSWORD: ${DEMO_USERS_PASSWORD:?set DEMO_USERS_PASSWORD in deploy/docker/.env}
+      GATEWAY_CIRCUIT_OPEN_FOR: ${GATEWAY_CIRCUIT_OPEN_FOR:-30s}   # how long an open circuit refuses calls
+      # No JWT key files here: the gateway makes a temporary key pair at every start (logged as a WARN)
+    ports:
+      - "127.0.0.1:8080:8080"   # the front door
+    depends_on:
+      redis:
+        condition: service_healthy
+      order-service:
+        condition: service_healthy
+      inventory-service:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 384M   # the lightest of the four (no database); heap up to 192 MB
+    healthcheck:
+      <<: *java-healthcheck
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8080/actuator/health/readiness"]
 
 volumes:
   pgdata:
