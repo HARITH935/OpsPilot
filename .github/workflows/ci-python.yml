@@ -1,0 +1,91 @@
+# CI for the Python projects: lint, format check and unit tests for loadgen/, lint and format check for e2e/.
+# Runs on every pull request to main and every push to main. A PR can only be merged when this passes
+# (branch protection, required checks "python-loadgen" and "python-e2e").
+name: ci-python
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# The automatic GitHub token may only read the repo
+permissions:
+  contents: read
+
+# A new push to the same PR cancels its older run; runs on main always finish
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Which folders did this PR change? Each job below runs only when its folder (or this file) changed.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      loadgen: ${{ steps.diff.outputs.loadgen }}
+      e2e: ${{ steps.diff.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2   # the PR's test merge commit and its first parent (main)
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "loadgen=true" >> "$GITHUB_OUTPUT"   # push to main: always everything
+            echo "e2e=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only HEAD^1 HEAD)
+          echo "Changed files:"; echo "$changed"
+          for project in loadgen e2e; do
+            if echo "$changed" | grep -qE "^($project/|\.github/workflows/ci-python\.yml$)"; then
+              echo "$project=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "$project=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
+
+  python-loadgen:
+    needs: changes
+    # Skipped (= counts as passed) only when loadgen/ didn't change; if the check broke, it runs anyway
+    if: ${{ !cancelled() && needs.changes.outputs.loadgen != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: loadgen
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.6"                        # the same uv as on the development machine
+          enable-cache: true
+          cache-dependency-glob: loadgen/uv.lock
+      - run: uv sync --locked          # exactly the versions in uv.lock (fails if it's out of date); Python 3.11 from .python-version
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .   # fails if a file isn't formatted (changes nothing)
+      - run: uv run pytest -q
+
+  python-e2e:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.e2e != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: e2e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.6"
+          enable-cache: true
+          cache-dependency-glob: e2e/uv.lock
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      # The end-to-end suite itself (the whole shop in Docker) runs in CI from step 3.5, together with the images

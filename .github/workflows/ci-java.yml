@@ -1,0 +1,74 @@
+# CI for the Java services: build and test everything in services/ (./mvnw verify) on every pull request to main
+# and every push to main. A PR can only be merged when this passes (branch protection, required check "java-verify").
+name: ci-java
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# The automatic GitHub token may only read the repo: this workflow needs nothing more
+permissions:
+  contents: read
+
+# A new push to the same PR cancels its older run; runs on main always finish
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Which folders did this PR change? The tests below run only when they're affected.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      java: ${{ steps.diff.outputs.java }}
+    steps:
+      # Actions are pinned to a full commit: a tag (v7.0.1) can be moved to other code later, a commit can't
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2   # the PR's test merge commit and its first parent (main), enough to compare them
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "java=true" >> "$GITHUB_OUTPUT"   # push to main: always everything
+            exit 0
+          fi
+          changed=$(git diff --name-only HEAD^1 HEAD)
+          echo "Changed files:"; echo "$changed"
+          if echo "$changed" | grep -qE '^(services/|\.github/workflows/ci-java\.yml$)'; then
+            echo "java=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "java=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  java-verify:
+    needs: changes
+    # Skipped only when the check above says "nothing Java changed". A skipped job counts as passed, so a docs-only
+    # PR isn't stuck waiting. If the check itself broke (no answer), the tests run anyway: when unsure, test.
+    if: ${{ !cancelled() && needs.changes.outputs.java != 'false' }}
+    runs-on: ubuntu-24.04   # a fixed Ubuntu version, not "latest": the same machine every time; it has Docker for Testcontainers
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: services
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven                              # keep Maven's downloads between runs (GitHub's cache)
+          cache-dependency-path: services/**/pom.xml   # a new cache when a pom changes
+      # All modules, all tests: unit, @WebMvcTest and Testcontainers (real Postgres, Kafka, Redis in Docker)
+      - run: ./mvnw --batch-mode --no-transfer-progress verify
+      # Only when something failed: the test reports, to download from the run's page (kept 7 days)
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: java-test-reports
+          path: services/*/target/surefire-reports/
+          retention-days: 7

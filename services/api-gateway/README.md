@@ -33,6 +33,11 @@ Needs Docker running: the full-gateway tests start their own throwaway Redis (Te
 the Redis in `deploy/docker`. In place of the services, they put small fake services (the HTTP server that comes with
 the JDK) on free local ports and point the routes at them.
 
+`BodylessRequestsLikeTomcat` (test code) makes MockMvc's requests without a body look like Tomcat's. MockMvc's fake
+request says its empty body is "not finished" until someone reads it, so the gateway would stream an empty body
+behind every test GET, which the real gateway never does. Java's HTTP client sometimes failed on that on GitHub's
+Linux runners (step 3.4). `GatewayRoutingTest` checks that a GET reaches the service without a body.
+
 ## Routes
 | Path | Goes to | Set with |
 |---|---|---|
