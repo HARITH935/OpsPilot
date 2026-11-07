@@ -1,0 +1,70 @@
+# Container images of the four services (amd64 + arm64), scanned with Trivy.
+# - Pull request to main: build + scan, nothing published. A PR can only be merged when this passes (required check
+#   "images").
+# - Push to main: build + scan, then publish to GHCR as ghcr.io/harith935/opspilot-<service>:sha-<short commit>.
+# Both run only when the images can have changed (services/, this file, the script).
+name: images
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Read-only by default; only the publish job below may write packages
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Can this change affect the images? (A PR: its changes; a push to main: the merged PR's changes.)
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      images: ${{ steps.diff.outputs.images }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2   # the new commit and its first parent (main before it), enough to compare them
+      - id: diff
+        run: |
+          changed=$(git diff --name-only HEAD^1 HEAD)
+          echo "Changed files:"; echo "$changed"
+          if echo "$changed" | grep -qE '^(services/|\.github/workflows/images\.yml$|\.github/scripts/build-images\.sh$)'; then
+            echo "images=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "images=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Pull requests: build for both chips and scan, publish nothing (read-only token)
+  images:
+    needs: changes
+    # Skipped (= passed) when nothing image-related changed; if the check broke, it runs anyway
+    if: ${{ github.event_name == 'pull_request' && !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: .github/scripts/build-images.sh
+
+  # Push to main: the same, then publish. Only this job may write packages.
+  publish:
+    needs: changes
+    if: ${{ github.event_name == 'push' && !cancelled() && needs.changes.outputs.images != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write   # push to ghcr.io/harith935/*
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Log in to GHCR with the run's automatic token (valid only for this run)
+      - env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: echo "$TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
+      - run: .github/scripts/build-images.sh --push
