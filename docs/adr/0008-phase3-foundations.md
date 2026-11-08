@@ -49,3 +49,8 @@ GitHub's standard runners are amd64.
   as small); fine at this size. Memory in use: 236–329 MB per service.
 - The cache mount helps only locally. In CI the build starts empty; how to cache there is decided in step 3.5.
 - In Kubernetes (Phase 4) the pods set `runAsNonRoot`, `readOnlyRootFilesystem: true` and a writable `emptyDir` on `/tmp`.
+- *(Updated in step 3.5a.)* The run stage also installs Ubuntu's security updates at build time (`apt-get upgrade`,
+  package lists deleted afterwards, +10 MB): Trivy in CI fails on HIGH / CRITICAL holes, and the first scan found one
+  in `apt` that the base image didn't have fixed yet. The price: two builds of the same commit on different days can
+  contain different Ubuntu package versions. The `sha-…` tag names the code, not the exact packages; the registry
+  digest names the exact image.

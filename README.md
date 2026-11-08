@@ -146,6 +146,10 @@ GitHub Actions runs these on every PR to `main` and every push to `main`; a PR c
 | `java-verify` ([ci-java.yml](.github/workflows/ci-java.yml)) | `./mvnw verify` in `services/`: all modules, all tests (Testcontainers on the runner's Docker) | `services/` changed |
 | `python-loadgen` ([ci-python.yml](.github/workflows/ci-python.yml)) | `ruff check`, `ruff format --check`, `pytest` in `loadgen/` | `loadgen/` changed |
 | `python-e2e` ([ci-python.yml](.github/workflows/ci-python.yml)) | `ruff check`, `ruff format --check` in `e2e/` | `e2e/` changed |
+| `images` ([images.yml](.github/workflows/images.yml)) | the four images for amd64 + arm64, scanned by Trivy (HIGH / CRITICAL fail) | `services/` changed |
+
+On `main`, the job `publish` builds and scans the same way and then pushes the images to GHCR:
+`ghcr.io/harith935/opspilot-<service>:sha-<short commit>` ([details](services/README.md#container-images)).
 
 A check whose folder didn't change is *skipped*, which counts as passed, so a docs-only PR isn't held up. Pushes to
 `main` always run everything. The workflows may only read the repo, and every action is pinned to a full commit.

@@ -36,6 +36,8 @@ The image is 172 MB to download (compressed). Measured: one changed Java line �
   `docker run --read-only --tmpfs /tmp …`. Kubernetes will do the same in Phase 4.
 - Heap up to **50%** of the container's memory limit (`-XX:MaxRAMPercentage=50`); the rest is for Java's memory
   outside the heap. More options: `-e JAVA_TOOL_OPTIONS=…`. With 512 MB the services use 236–329 MB each.
+- Ubuntu's security updates are installed at build time (`apt-get upgrade` in the run stage, +10 MB), so a hole fixed
+  after the base image was made is fixed in ours too (step 3.5a).
 
 **Two chip types.** The `build` stage runs on the build machine's own chip (`--platform=$BUILDPLATFORM`): a jar is the
 same everywhere, so only the small run stage is made per chip. An amd64 image builds on an arm64 Mac in 15 s:
@@ -51,3 +53,14 @@ DB_PASSWORD=$(grep '^ORDERS_DB_PASSWORD=' ../deploy/docker/.env | cut -d= -f2-) 
 ```
 `-e DB_PASSWORD` without a value passes the variable from your shell, so the password never appears in the command.
 Step 3.2 adds all four services to `docker compose`.
+
+**In CI** ([images.yml](../.github/workflows/images.yml), [build-images.sh](../.github/scripts/build-images.sh)): every
+PR that touches `services/` builds all four for amd64 + arm64 and scans them with **Trivy** (known vulnerabilities in
+Ubuntu packages and Java libraries, plus leaked secrets); a HIGH or CRITICAL finding fails the required check `images`.
+Each push to `main` does the same and then publishes, only if every scan passed:
+```
+ghcr.io/harith935/opspilot-<service>:sha-<first 7 characters of the commit>    # amd64 + arm64 under one name
+```
+Trivy comes straight from its GitHub release, checked against a SHA-256 in the script; the helper images (BuildKit,
+QEMU) are pinned by digest. Not the `trivy-action`: its version tags were moved to credential-stealing code in March
+2026 (CVE-2026-33634).

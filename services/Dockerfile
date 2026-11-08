@@ -41,8 +41,13 @@ ARG SERVICE
 LABEL org.opencontainers.image.source="https://github.com/HARITH935/OpsPilot" \
       org.opencontainers.image.title="opspilot-${SERVICE}" \
       org.opencontainers.image.description="OpsPilot ${SERVICE} (Spring Boot)"
-# The user the service runs as: no password, no login shell, no home directory
-RUN groupadd --system --gid 10001 opspilot \
+# Ubuntu's security fixes published since the base image was made (Trivy fails CI on known HIGH / CRITICAL holes,
+# step 3.5a); the package lists are deleted again so they don't stay in the image.
+# Then the user the service runs as: no password, no login shell, no home directory.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd --system --gid 10001 opspilot \
  && useradd --system --uid 10001 --gid opspilot --no-create-home --shell /usr/sbin/nologin opspilot
 WORKDIR /app
 # Least often changed first: a new build of our code only replaces the last, small layer.
