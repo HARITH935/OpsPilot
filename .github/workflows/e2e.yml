@@ -1,0 +1,87 @@
+# The end-to-end tests (e2e/) in CI: the whole shop in Docker Compose on the runner, from images built from this
+# commit, then the 6 tests through the gateway. Runs on every pull request to main and every push to main that can
+# change the result (services/, e2e/, deploy/docker/, this file). A PR can only be merged when this passes
+# (required check "e2e").
+name: e2e
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      e2e: ${{ steps.diff.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2   # the new commit and its first parent, enough to compare them
+      - id: diff
+        run: |
+          changed=$(git diff --name-only HEAD^1 HEAD)
+          echo "Changed files:"; echo "$changed"
+          if echo "$changed" | grep -qE '^(services/|e2e/|deploy/docker/|\.github/workflows/e2e\.yml$)'; then
+            echo "e2e=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "e2e=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  e2e:
+    needs: changes
+    # Skipped (= passed) when nothing it tests changed; if the check broke, it runs anyway
+    if: ${{ !cancelled() && needs.changes.outputs.e2e != 'false' }}
+    runs-on: ubuntu-24.04   # 4 CPUs, 16 GB: the whole shop needs about 1.6 GB
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.6"
+          enable-cache: true
+          cache-dependency-glob: e2e/uv.lock
+      # Compose reads the passwords from deploy/docker/.env. This one exists only on this runner, for this run: every
+      # change-me from the template becomes a random value, masked so it never appears in the log.
+      - name: A .env for this run only
+        run: |
+          cp deploy/docker/.env.example deploy/docker/.env
+          for key in $(grep -E '^[A-Z_]+=change-me$' deploy/docker/.env | cut -d= -f1); do
+            value=$(openssl rand -hex 16)
+            echo "::add-mask::$value"
+            sed -i "s/^$key=change-me\$/$key=$value/" deploy/docker/.env
+          done
+          if grep -q 'change-me' deploy/docker/.env; then echo "::error::a change-me is left in .env"; exit 1; fi
+          echo "Set: $(grep -cE '^[A-Z_]+=' deploy/docker/.env) values"
+      # Build the four images first, as a step of its own: the time shows separately, and the suite's own
+      # `up --build` then finds them ready
+      - name: Build the images (docker compose, profile apps)
+        run: docker compose -f deploy/docker/docker-compose.yml --profile apps build
+      - name: The end-to-end tests
+        working-directory: e2e
+        run: |
+          uv sync --locked
+          uv run pytest
+      # Only when something failed: the services' logs (saved by the suite) and the infrastructure's, kept 7 days
+      - if: failure()
+        run: |
+          mkdir -p e2e/logs
+          for c in opspilot-postgres opspilot-kafka opspilot-kafka-init opspilot-redis; do
+            docker logs "$c" > "e2e/logs/$c.log" 2>&1 || true
+          done
+          docker compose -f deploy/docker/docker-compose.yml --profile apps ps -a || true
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-logs
+          path: e2e/logs/
+          retention-days: 7
