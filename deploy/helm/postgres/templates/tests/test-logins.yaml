@@ -1,0 +1,74 @@
+{{- /* helm test <release> -n <namespace>: starts this pod once and reports whether it succeeded.
+       It logs in over the network like a service would, and checks who may connect to which database. */}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}-test-logins
+  labels:
+    {{- include "postgres.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation   # keep the last test pod (and its log) until the next run
+spec:
+  restartPolicy: Never
+  securityContext:              # passes the "restricted" Pod Security level
+    runAsNonRoot: true
+    runAsUser: 26               # the "postgres" user of CloudNativePG's images
+    runAsGroup: 26
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: logins
+      image: {{ .Values.image }}   # the database image: it has psql, and it is already on the node
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          memory: 64Mi
+      env:
+        - name: PGHOST              # psql connects here: the Service of the primary
+          value: {{ .Release.Name }}-rw
+        - name: PGCONNECT_TIMEOUT
+          value: "5"
+        # The passwords, from the logins' Secrets (never written into the pod spec)
+        {{- range .Values.databases }}
+        - name: {{ upper .name }}_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .secret }}
+              key: password
+        {{- end }}
+      command: ["sh", "-c"]
+      args:
+        - |
+          failed=0
+          # check <expected: ok | refused | bad-password> <user> <password> <database>
+          check() {
+            out=$(PGPASSWORD="$3" psql -U "$2" -d "$4" -tAc 'select current_user' 2>&1)
+            case "$1" in
+              ok)           [ "$out" = "$2" ] ;;
+              refused)      echo "$out" | grep -q 'pg_hba.conf rejects connection' ;;
+              bad-password) echo "$out" | grep -q 'password authentication failed' ;;
+            esac
+            if [ $? -eq 0 ]; then echo "ok    $2 -> $4: $1"; else echo "FAIL  $2 -> $4: expected $1, got: $out"; failed=1; fi
+          }
+          {{- range $db := .Values.databases }}
+          {{- range $login := $.Values.databases }}
+          check {{ if eq $db.name $login.name }}ok{{ else }}refused{{ end }} {{ $login.owner }} "${{ upper $login.name }}_PASSWORD" {{ $db.name }}
+          {{- end }}
+          {{- end }}
+          {{- $first := first .Values.databases }}
+          check bad-password {{ $first.owner }} not-the-password {{ $first.name }}
+
+          # pgvector (vector search, Phase 11) is in the image
+          vector=$(PGPASSWORD="${{ upper $first.name }}_PASSWORD" psql -U {{ $first.owner }} -d {{ $first.name }} -tAc \
+            "select count(*) from pg_available_extensions where name = 'vector'" 2>&1)
+          if [ "$vector" = 1 ]; then echo "ok    pgvector is available"; else echo "FAIL  pgvector: $vector"; failed=1; fi
+
+          exit $failed

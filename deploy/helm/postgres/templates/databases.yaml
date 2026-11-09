@@ -1,0 +1,18 @@
+{{- /* One Database resource per service: the operator creates the database in PostgreSQL, owned by the service's
+       login. The first one already exists from bootstrap (cluster.yaml); listing it here too keeps all three managed
+       the same way. Deleting a Database resource (e.g. helm uninstall) keeps the database and its data
+       (databaseReclaimPolicy "retain", the default). */}}
+{{- range .Values.databases }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: {{ $.Release.Name }}-{{ .name }}
+  labels:
+    {{- include "postgres.labels" $ | nindent 4 }}
+spec:
+  cluster:
+    name: {{ $.Release.Name }}
+  name: {{ .name }}
+  owner: {{ .owner }}
+{{- end }}

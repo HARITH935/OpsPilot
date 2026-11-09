@@ -16,11 +16,11 @@ metadata:
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: opspilot-data   # Postgres (CloudNativePG, 4.2) and Kafka (Strimzi, 4.3)
+  name: opspilot-data   # Postgres + its operator (CloudNativePG, 4.2a), Kafka (Strimzi, 4.3)
   labels:
-    # "baseline" for now: blocks the clearly dangerous (privileged, host network, ...). Whether the operators' pods
-    # also pass "restricted" is checked in 4.2 / 4.3; until then kubectl warns about anything that wouldn't.
-    pod-security.kubernetes.io/enforce: baseline
+    # "restricted" too (since 4.2a): the CloudNativePG operator and PostgreSQL pods pass it (checked with a server-side
+    # dry run). Strimzi's pods (4.3) will have to pass it as well.
+    pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/enforce-version: v1.36
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/audit: restricted

@@ -1,0 +1,33 @@
+# Default settings of the postgres chart. Override per environment with --values / --set.
+
+# Number of PostgreSQL pods: 1 = one primary, no standby copies (more would replicate the data; not on an 8 GB Mac)
+instances: 1
+
+# CloudNativePG's "standard" image (PostgreSQL 16.15 on Debian 13, incl. pgvector for Phase 11), the weekly build of
+# 2026-10-26, pinned by digest. CloudNativePG reads the PostgreSQL version from the tag, so the tag stays in front.
+image: ghcr.io/cloudnative-pg/postgresql:16.15-202610260820-standard-trixie@sha256:1ec419e997a8bde5263b6951f4c5ebc4aa2e1937927001f2561025c0a816e174
+
+storage:
+  size: 1Gi
+  storageClass: ""   # "" = the cluster's default (kind: "standard", a folder on the node)
+
+resources:
+  requests:          # what the scheduler reserves for the pod
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi    # like the Compose container; PostgreSQL itself is set to 128 MB of shared buffers by default
+
+# One database per service, owned by its own login (database-per-service, ADR 0003; same names as in Compose).
+# "secret" = the basic-auth Secret with that login's password, in the same namespace: created from deploy/docker/.env
+# by deploy/k3s/secrets-from-env.sh locally, a Sealed Secret in the cloud (Phase 5).
+databases:
+  - name: orders
+    owner: orders_user
+    secret: orders-db
+  - name: inventory
+    owner: inventory_user
+    secret: inventory-db
+  - name: payments
+    owner: payments_user
+    secret: payments-db

@@ -1,0 +1,7 @@
+apiVersion: v2
+name: postgres
+description: OpsPilot's PostgreSQL 16 with a database and a login per service, run by the CloudNativePG operator
+type: application
+version: 0.1.0          # the chart's own version
+appVersion: "16.15"     # the PostgreSQL version it runs (values.yaml: image)
+kubeVersion: ">=1.34.0-0"   # CloudNativePG 1.30 supports Kubernetes 1.34 - 1.36
