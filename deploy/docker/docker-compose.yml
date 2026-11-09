@@ -215,7 +215,7 @@ services:
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/payments
       DB_PASSWORD: ${PAYMENTS_DB_PASSWORD:?set PAYMENTS_DB_PASSWORD in deploy/docker/.env}
-      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9999   # DELIBERATELY WRONG: checks that the e2e job catches it
       # The simulated payment provider: healthy unless set otherwise for one start (chaos scenario C12 uses 0.5)
       PAYMENT_FAILURE_RATE: ${PAYMENT_FAILURE_RATE:-0.0}
       PAYMENT_LATENCY_MS: ${PAYMENT_LATENCY_MS:-100}
