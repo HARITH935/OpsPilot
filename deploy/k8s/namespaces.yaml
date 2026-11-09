@@ -1,0 +1,26 @@
+# OpsPilot's namespaces (CLAUDE.md §8), with Kubernetes' Pod Security Admission rules. A pod that breaks the
+# namespace's level is refused when it is created. More namespaces (opspilot-obs, opspilot-agent, ...) come with the
+# phases that need them. Apply: kubectl apply -f deploy/k8s/namespaces.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opspilot-apps   # the four services (and the data-plane Redis, step 4.2)
+  labels:
+    # "restricted", the strictest level: no root, no privilege escalation, no Linux capabilities, seccomp on.
+    # Our images run as user 10001 and need none of these (step 3.1).
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.36   # pinned: a Kubernetes upgrade can't tighten the rules by surprise
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opspilot-data   # Postgres (CloudNativePG, 4.2) and Kafka (Strimzi, 4.3)
+  labels:
+    # "baseline" for now: blocks the clearly dangerous (privileged, host network, ...). Whether the operators' pods
+    # also pass "restricted" is checked in 4.2 / 4.3; until then kubectl warns about anything that wouldn't.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: v1.36
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

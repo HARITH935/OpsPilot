@@ -3,7 +3,7 @@
 > Live checklist. Update after every step.
 > Legend: `[x]` done · `[ ]` todo · `[~]` in progress
 
-**Current phase:** 4 — Kubernetes Platform, next (Phase 0 complete 2026-10-30 · Phase 1 complete 2026-11-01 · Phase 2 complete 2026-11-04 · Phase 3 complete 2026-11-09)
+**Current phase:** 4 — Kubernetes Platform, 4.1 done (Phase 0 complete 2026-10-30 · Phase 1 complete 2026-11-01 · Phase 2 complete 2026-11-04 · Phase 3 complete 2026-11-09)
 
 ---
 
@@ -69,11 +69,15 @@
 - **Phase 3 complete (2026-11-09).** Known gaps: the list under Phase 2 (8 and 11 closed in 3.5b; 12–13 new in 3.5a). Images: `ghcr.io/harith935/opspilot-<service>:sha-<commit>`; 5 required checks on `main`
 
 ## Phase 4 — Kubernetes Platform
-- [ ] 1. kind cluster (3 nodes); namespaces
-- [ ] 2. Operators: CloudNativePG, Strimzi, Sealed Secrets; Redis Helm chart (StatefulSet), password from a Kubernetes Secret
-- [ ] 3. Helm chart per service (Deployment, Service, ConfigMap, probes, resources, HPA, PDB, NetworkPolicy); umbrella chart
-- [ ] 4. Ingress-NGINX routing to gateway and dashboard placeholder
-- [ ] 5. Load test to watch HPA scale
+> One kind node locally, the full three-node cluster in CI — [ADR 0009](adr/0009-lean-local-kubernetes.md).
+> Every step is one PR. Decision point after 4.2: continue locally or move the heavy steps to the CI cluster (the Mac swaps).
+
+- [x] 4.1 kind cluster (1 node, Kubernetes 1.36.4), namespaces with Pod Security (`opspilot-apps` restricted, `opspilot-data` baseline), metrics-server
+- [ ] 4.2 Sealed Secrets, Postgres (CloudNativePG), Redis (own Helm chart, StatefulSet), passwords from Secrets
+- [ ] 4.3 Kafka (Strimzi, KRaft, 1 broker) + the topics
+- [ ] 4.4 Helm chart per service (Deployment, Service, ConfigMap, probes, resources, PDB) + umbrella chart; images from GHCR
+- [ ] 4.5 Ingress-NGINX to the gateway (+ dashboard placeholder); NetworkPolicies (default deny + allows)
+- [ ] 4.6 HPA under load (Locust), killed pods recover, the full three-node cluster in CI; Phase 4 wrap-up
 - **Acceptance:** [ ] `helm install` brings up full system · [ ] orders work through Ingress · [ ] HPA scales under load · [ ] killed pods recover
 
 ## Phase 5 — Go Live
@@ -196,3 +200,5 @@
 | 2026-11-07 | 3.4 follow-up after the merge: throwaway docs-only PR #36 → `java-verify`, `python-loadgen`, `python-e2e` all *skipped*, only the two `changes` jobs ran (3–5 s), merge state CLEAN; closed unmerged. `ci-java` + `ci-python` green on main after the merge | — |
 | 2026-11-07 | 3.5a images in CI: `.github/workflows/images.yml` (job `images` on PRs, read-only: build + scan; job `publish` on pushes to main, `packages: write`: build + scan + push; both only when `services/`, the workflow or the script changed) and `.github/scripts/build-images.sh` (QEMU via `tonistiigi/binfmt` 10.2.3 + a BuildKit v0.34.1 builder, both pinned by digest; Trivy v0.76.1 from its GitHub release, refused unless it matches a SHA-256 in the script, not the `trivy-action` (tags hijacked in March 2026, CVE-2026-33634); per service: amd64 + arm64 build, amd64 loaded and scanned for vulnerabilities + secrets, HIGH / CRITICAL fail; publish only if every scan passed: `ghcr.io/harith935/opspilot-<service>:sha-<short>`, both chips under one name, label `image.revision`); required check `images` added; fixes for what the first scan found: `lz4-java` 1.11.4 + `snappy-java` 1.1.10.9 managed in the parent pom (were 1.11.2 / 1.1.10.7 via kafka-clients 4.2.2), Ubuntu security updates in the Dockerfile's run stage (ADR 0008 updated) | First scan: all four images HIGH (no CRITICAL, no secrets, our code clean): `apt` CVE-2026-109518 in Ubuntu (all four), `lz4-java` CVE-2026-106451 and `snappy-java` CVE-2026-108106 / CVE-2026-93451 in order / inventory / payment; nothing published. After the fixes: dependency tree shows the new versions, `./mvnw verify` 398 tests green, image has apt 2.8.4ubuntu0.1 (+10 MB, 175.6 MB compressed); CI: `images` green in 9.4 min, all 442 rows of Trivy's tables 0 findings, `java-verify` green. Publishing to GHCR happens on the merge, verified in 3.5b. Tried first: a local Trivy scan on the Mac, blocked by the safety check (downloading and running a binary), so the first scan ran in CI |
 | 2026-11-09 | 3.5b the e2e suite in CI — **Phase 3 complete**: `.github/workflows/e2e.yml` (job `e2e` on PRs and pushes to main that touch `services/`, `e2e/`, `deploy/docker/` or the workflow; a `.env` for the run only, every `change-me` a random value hidden with `::add-mask::`; the four images built with compose as their own step; `uv run pytest`; on failure the services' + infrastructure's logs kept 7 days); Dockerfile: Maven cache mount `sharing=locked` (Compose builds the four at once, CI starts with an empty cache); `e2e` = the 5th required check; README "What Phase 3 can do" | PR #38: `e2e` green in 3.4 min (images built 73 s, tests 127 s: "6 passed in 125.65s"), 7 values set, no password in the log; `java-verify` + `images` green. Throwaway PR #39 with payment-service's Kafka address wrong in the compose file → `java-verify` and `images` green, only `e2e` red ("payment-service: Kafka listeners got no partitions within 90 s"), logs kept, merge BLOCKED; closed unmerged. Images published by 3.5a's merge: `ghcr.io/harith935/opspilot-<service>:sha-e7c6546`, all four amd64 + arm64, anonymous manifest fetch HTTP 200 (public); pulled on the Mac → arm64 by itself, user 10001, label `revision` = the merge commit, started against the stack → `UP`, apt 2.8.4ubuntu0.1 + the fixed jars inside |
+| 2026-11-09 | Phase 4 planned (option A of three): one kind node locally, the full three-node cluster in CI ([ADR 0009](adr/0009-lean-local-kubernetes.md)); Docker Desktop 3.8 → 5 GB, kubectl 1.34 → 1.37.2 (Homebrew) | before: the Mac swapped 6.9 GB (Docker's window wouldn't open); after a restart still 4.5 GB in swap without any cluster |
+| 2026-11-09 | 4.1 the local cluster: `deploy/k3s/kind-config.yaml` (1 node, `kindest/node:v1.36.4` pinned by digest, ports 80 / 443 on 127.0.0.1 for the Ingress in 4.5), `deploy/k3s/kind-up.sh` (create, namespaces, metrics-server), `deploy/k8s/namespaces.yaml` (`opspilot-apps` Pod Security restricted, `opspilot-data` baseline + warn restricted, versions pinned to v1.36), `deploy/k3s/metrics-server-values.yaml` (chart 3.14.0, `--kubelet-insecure-tls` local only) | `kind-up.sh` 132 s first time, 61 s after `kind delete` (1 s); node Ready, v1.36.4, arm64; 10 system pods + metrics-server Running; `kubectl top node` 658 MiB / 0.26 CPU, node container ~670 MB of 4.8 GB; a root busybox pod in `opspilot-apps` → Forbidden (4 violations listed); our order-service image pulled from GHCR (`sha-218a8ef`, digest df1a8ab8…) runs there under restricted as uid 10001. The Mac: 5.8 GB in swap, ~140 MB swapped in / ~50 MB out in 30 idle seconds with the empty cluster → decision point after 4.2 |
