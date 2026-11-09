@@ -1,0 +1,9 @@
+PostgreSQL "{{ .Release.Name }}" is being set up by CloudNativePG in {{ .Release.Namespace }}.
+
+  Status:      kubectl get cluster,database,pods -n {{ .Release.Namespace }}
+  Check it:    helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+  Admin shell: kubectl exec -it {{ .Release.Name }}-1 -n {{ .Release.Namespace }} -- psql
+  Services connect to: {{ .Release.Name }}-rw.{{ .Release.Namespace }}.svc:5432
+    {{- range .Values.databases }}
+    database {{ .name }}, login {{ .owner }} (password in Secret {{ .secret }})
+    {{- end }}

@@ -1,0 +1,53 @@
+{{- /* The PostgreSQL "Cluster": what we want, in CloudNativePG's words. The operator creates the pod, its disk,
+       the Services (<release>-rw = the primary, for reads and writes) and keeps them that way. */}}
+{{- $first := first .Values.databases }}
+{{- $names := list }}
+{{- range .Values.databases }}{{ $names = append $names .name }}{{ end }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "postgres.labels" . | nindent 4 }}
+spec:
+  instances: {{ .Values.instances }}
+  imageName: {{ .Values.image }}
+  storage:   # a PersistentVolumeClaim: the data stays when the pod is replaced
+    size: {{ .Values.storage.size }}
+    {{- with .Values.storage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+  resources:
+    {{- toYaml .Values.resources | nindent 4 }}
+  # The "postgres" superuser gets no password, so nobody can log in as it over the network. Admins use the pod's
+  # local socket instead: kubectl exec -it <release>-1 -n opspilot-data -- psql
+  enableSuperuserAccess: false
+  bootstrap:
+    initdb:
+      # CloudNativePG creates one database when the cluster is first set up ("app" unless told otherwise):
+      # make it the first service's, the others follow as Database resources (databases.yaml)
+      database: {{ $first.name }}
+      owner: {{ $first.owner }}
+      secret:
+        name: {{ $first.secret }}
+  managed:
+    # One login per service, password from its Secret. The operator applies them when this Cluster or a Secret
+    # changes, and then also puts back anything changed by hand in PostgreSQL (measured: a password changed with
+    # ALTER ROLE stayed changed for 6 minutes, and was put back 8 s after the next change to this resource).
+    roles:
+      {{- range .Values.databases }}
+      - name: {{ .owner }}
+        login: true
+        passwordSecret:
+          name: {{ .secret }}
+      {{- end }}
+  postgresql:
+    # Who may connect to what (pg_hba.conf). PostgreSQL uses the FIRST rule that matches, top to bottom.
+    # Format: <connection type> <database> <user> <client address> <method>. "host" = over the network.
+    pg_hba:
+      {{- range .Values.databases }}
+      - host {{ .name }} {{ .owner }} all scram-sha-256
+      {{- end }}
+      # Any other login, to any of these databases: refused, before CloudNativePG's own last rule
+      # ("host all all all scram-sha-256") would let it in. Same as REVOKE CONNECT in the Compose init script.
+      - host {{ join "," $names }} all all reject

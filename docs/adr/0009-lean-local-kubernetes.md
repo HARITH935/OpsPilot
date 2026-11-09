@@ -1,6 +1,6 @@
 # ADR 0009 — Phase 4: a one-node kind cluster locally, the full three-node cluster in CI
 
-- **Status:** Accepted
+- **Status:** Accepted (point 4 updated by [ADR 0010](0010-postgres-on-kubernetes.md): `opspilot-data` enforces "restricted" too)
 - **Date:** 2026-11-09
 
 ## Context

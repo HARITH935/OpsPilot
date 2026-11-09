@@ -14,3 +14,4 @@ Each records the context, the decision, the alternatives considered and the cons
 | [0007](0007-provider-breaker-judges-payments.md) | The payment provider's circuit breaker judges payments, not attempts | 2026-11-04 |
 | [0008](0008-phase3-foundations.md) | Phase 3: one Dockerfile for all services, the jar built inside Docker, Temurin 21 base images | 2026-11-04 |
 | [0009](0009-lean-local-kubernetes.md) | Phase 4: a one-node kind cluster locally, the full three-node cluster in CI | 2026-11-09 |
+| [0010](0010-postgres-on-kubernetes.md) | PostgreSQL on Kubernetes: CloudNativePG in opspilot-data, local Secrets from .env, Sealed Secrets in Phase 5 | 2026-11-09 |

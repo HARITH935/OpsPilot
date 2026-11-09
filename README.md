@@ -130,9 +130,14 @@ cd e2e && uv sync && uv run pytest
 JDK or Maven on your machine: `cd services && docker build --build-arg SERVICE=order-service -t opspilot/order-service:dev .`
 Non-root, layered (a code change replaces ~100 kB), for amd64 and arm64. Details: [services/README.md](services/README.md#container-images).
 
-**Kubernetes (Phase 4, in progress):** `deploy/k3s/kind-up.sh` creates a local one-node kind cluster with OpsPilot's
-namespaces (strict Pod Security) and metrics-server, in about a minute. Needs Docker Desktop with 5 GB; stop the
-Compose stack first. Details: [deploy/k3s](deploy/k3s/README.md), [ADR 0009](docs/adr/0009-lean-local-kubernetes.md).
+**Kubernetes (Phase 4, in progress):**
+- `deploy/k3s/kind-up.sh` creates a local one-node kind cluster in about 1.5 minutes. It comes with OpsPilot's
+  namespaces (strict Pod Security), metrics-server and the CloudNativePG operator.
+- `deploy/k3s/secrets-from-env.sh` and the [`postgres`](deploy/helm/README.md#postgres) Helm chart add PostgreSQL 16:
+  one database and login per service, checked by `helm test`.
+- Needs Docker Desktop with 5 GB; stop the Compose stack first.
+- Details: [deploy/k3s](deploy/k3s/README.md), [ADR 0009](docs/adr/0009-lean-local-kubernetes.md),
+  [ADR 0010](docs/adr/0010-postgres-on-kubernetes.md).
 
 ## What Phase 2 can do
 | | Shown by | Result (real runs, 2026-11-04) |
