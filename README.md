@@ -44,7 +44,7 @@ Prometheus · Grafana · PyTorch · LangGraph · FastAPI · React · TypeScript
 | `docs/` | Progress, ADRs, runbooks |
 
 ## Run locally
-Today (Phases 1 and 2 done, Phase 3 in progress): the three services and the API gateway, with PostgreSQL, Kafka and
+Today (Phases 1–3 done): the three services and the API gateway, with PostgreSQL, Kafka and
 Redis. The services talk through Kafka (the order saga): an order is reserved and priced by inventory, charged by
 payment, then confirmed (stock committed), or cancelled (out of stock, or payment failed and the stock released).
 
@@ -139,6 +139,16 @@ Non-root, layered (a code change replaces ~100 kB), for amd64 and arm64. Details
 | A service down → its circuit opens, then closes again | `e2e/` `test_resilience.py` | 503 + `Retry-After` in under 0.1 s, closed again once the service is back |
 | A struggling payment provider (50% errors) | [payment-service](services/payment-service/README.md#protection-around-the-provider) | 37 of 40 orders confirmed thanks to retries ([ADR 0007](docs/adr/0007-provider-breaker-judges-payments.md)) |
 
+## What Phase 3 can do
+| | Shown by | Result (real runs, 2026-11-04 … 09) |
+|---|---|---|
+| The whole shop with one command, no JDK | [deploy/docker](deploy/docker/README.md#the-shop-profile-apps) (`--profile apps up -d --build --wait`) | from nothing to everything healthy in 47 s; 1.6 GB; order `CONFIRMED` |
+| Small, safe images for two chips | [services/Dockerfile](services/Dockerfile), [ADR 0008](docs/adr/0008-phase3-foundations.md) | 176 MB, our code a 100 kB layer; user 10001, read-only, no Linux capabilities; amd64 + arm64 |
+| Every PR checked before it can be merged | [CI](#checks-on-every-pull-request-ci): 5 required checks | a deliberately broken test → ❌ and merge BLOCKED; docs-only PR → checks skipped, mergeable |
+| No image with a known HIGH / CRITICAL hole is published | `images` (Trivy) | first scan found 3 (`apt`, `lz4-java`, `snappy-java`), fixed; now 0 findings in all 442 checked parts |
+| The end-to-end tests on a clean machine | `e2e` in CI | 6 of 6 on GitHub's runner in 3.4 min (images built 73 s, tests 127 s) |
+| Images ready for Kubernetes | GHCR (public) | `ghcr.io/harith935/opspilot-<service>:sha-<commit>`; pulled on an arm64 Mac without login, started, `UP` |
+
 ## Checks on every pull request (CI)
 GitHub Actions runs these on every PR to `main` and every push to `main`; a PR can only be merged when they pass:
 | Check | Runs | When |
@@ -147,12 +157,14 @@ GitHub Actions runs these on every PR to `main` and every push to `main`; a PR c
 | `python-loadgen` ([ci-python.yml](.github/workflows/ci-python.yml)) | `ruff check`, `ruff format --check`, `pytest` in `loadgen/` | `loadgen/` changed |
 | `python-e2e` ([ci-python.yml](.github/workflows/ci-python.yml)) | `ruff check`, `ruff format --check` in `e2e/` | `e2e/` changed |
 | `images` ([images.yml](.github/workflows/images.yml)) | the four images for amd64 + arm64, scanned by Trivy (HIGH / CRITICAL fail) | `services/` changed |
+| `e2e` ([e2e.yml](.github/workflows/e2e.yml)) | the whole shop in Docker Compose on the runner, then the 6 [end-to-end tests](e2e/README.md) | `services/`, `e2e/` or `deploy/docker/` changed |
 
-On `main`, the job `publish` builds and scans the same way and then pushes the images to GHCR:
+On `main`, the job `publish` builds and scans the same way and then pushes the images to GHCR (public):
 `ghcr.io/harith935/opspilot-<service>:sha-<short commit>` ([details](services/README.md#container-images)).
 
-A check whose folder didn't change is *skipped*, which counts as passed, so a docs-only PR isn't held up. Pushes to
-`main` always run everything. The workflows may only read the repo, and every action is pinned to a full commit.
+A check whose folder didn't change is *skipped*, which counts as passed, so a docs-only PR isn't held up. On pushes to
+`main`, `ci-java` and `ci-python` always run everything; `images` / `publish` and `e2e` run when their folders changed.
+The workflows may only read the repo (only `publish` may write packages), and every action is pinned to a full commit.
 
 ## Progress
 See [docs/PROGRESS.md](docs/PROGRESS.md).

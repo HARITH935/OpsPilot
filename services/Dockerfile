@@ -25,7 +25,8 @@ COPY common-messaging/src common-messaging/src
 COPY ["${SERVICE:?is required, e.g. --build-arg SERVICE=order-service}/src", "${SERVICE}/src"]
 # -pl: this service, -am: plus the modules it uses. Tests already ran (./mvnw verify, CI); not again here.
 # The cache mount keeps Maven's downloads (~/.m2) between builds on this machine; it is not part of any image.
-RUN --mount=type=cache,target=/root/.m2 \
+# sharing=locked: Compose builds the four images at once, and two Maven processes must not write the same folder.
+RUN --mount=type=cache,target=/root/.m2,sharing=locked \
     ./mvnw --batch-mode --no-transfer-progress -pl "$SERVICE" -am -DskipTests package \
  && cp "$SERVICE"/target/"$SERVICE"-*.jar /app.jar
 
