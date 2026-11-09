@@ -73,4 +73,11 @@ the provider had been **charged a second time**. Counting stored payments alone 
 uv run ruff check . && uv run ruff format .
 ```
 `stack.py` starts and stops the services with `docker compose` (the file `deploy/docker/docker-compose.yml`, profile
-`apps`); `shop.py` is the client side: HTTP calls, waits, metrics, Kafka. Next, CI runs the same suite (Phase 3).
+`apps`); `shop.py` is the client side: HTTP calls, waits, metrics, Kafka.
+
+## In CI
+[`.github/workflows/e2e.yml`](../.github/workflows/e2e.yml) runs the same suite on every PR (and push to `main`) that
+touches `services/`, `e2e/` or `deploy/docker/`; it is a required check (`e2e`). The runner gets a `.env` of its own,
+with a random, masked value for every `change-me`, builds the four images with Compose, then runs `uv run pytest`. If
+anything fails, the services' and the infrastructure's logs are kept 7 days. First run (2026-11-08): 6 of 6 in 3.4
+minutes (images built 73 s, tests 127 s).
