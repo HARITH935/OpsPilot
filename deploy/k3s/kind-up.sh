@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Creates the local Kubernetes cluster "opspilot" (kind, one node) with OpsPilot's namespaces, metrics-server and the
-# PostgreSQL operator (CloudNativePG). Next: deploy/k3s/secrets-from-env.sh, then the postgres chart (deploy/k3s/README.md).
+# operators for PostgreSQL (CloudNativePG) and Kafka (Strimzi). Next: deploy/k3s/secrets-from-env.sh, then the charts
+# in deploy/helm (deploy/k3s/README.md).
 # Run from anywhere; needs Docker (5 GB of memory for Docker Desktop, ADR 0009), kind, kubectl and helm.
 # Delete it again with: kind delete cluster --name opspilot
 set -euo pipefail
@@ -20,5 +21,9 @@ helm upgrade --install metrics-server metrics-server \
 helm upgrade --install cnpg cloudnative-pg \
   --repo https://cloudnative-pg.github.io/charts --version 0.29.1 \
   --namespace opspilot-data --values deploy/k3s/cnpg-values.yaml --wait --timeout 3m
+
+# The Strimzi operator (runs Kafka for us, step 4.3); its chart is published as an OCI image on quay.io
+helm upgrade --install strimzi oci://quay.io/strimzi-helm/strimzi-kafka-operator --version 1.3.0 \
+  --namespace opspilot-data --values deploy/k3s/strimzi-values.yaml --wait --timeout 3m
 
 kubectl get nodes -o wide

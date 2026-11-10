@@ -1,0 +1,45 @@
+# Default settings of the kafka chart. The release name names the Kafka cluster: release "kafka" → the address
+# kafka-kafka-bootstrap.<namespace>.svc:9092 (Strimzi adds "-kafka-bootstrap").
+
+# Kafka 4.2.2: the same version as Docker Compose and as the Kafka client inside our services. Strimzi needs the version
+# and the matching metadata version (the format of KRaft's own records) spelled out.
+version: 4.2.2
+metadataVersion: 4.2-IV1
+# Strimzi's Kafka image for that version (Strimzi 1.3.0 + Kafka 4.2.2), pinned by digest
+image: quay.io/strimzi/kafka:1.3.0-kafka-4.2.2@sha256:b9b9e37491ce17c1b2722b3668661de91430d9437acf18c5f5bafaef38138652
+
+# The one node: controller (keeps the cluster's metadata, KRaft) and broker (stores messages) at the same time
+node:
+  heap: 512m          # like Compose (-Xmx512m); Kafka's own default is 1 GB
+  storage: 2Gi        # messages + KRaft metadata, on a PersistentVolumeClaim: they survive a restart
+  resources:
+    requests:
+      cpu: 200m
+      memory: 768Mi
+    limits:
+      memory: 1Gi     # the 512 MB heap + Java's memory outside the heap, as in Compose
+
+# The Topic Operator turns the KafkaTopic objects below into real topics (and changes them back if edited by hand)
+topicOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      memory: 384Mi
+
+# Every topic OpsPilot uses (CLAUDE.md Part B §B2.2). The same list as deploy/docker/kafka/topics.txt for Compose:
+# change both together.
+partitions: 3   # the key (order id) picks the partition, so one order's events stay in order
+topics:
+  # Order saga events
+  - orders.events
+  - inventory.events
+  - payments.events
+  # Dead-letter topics: a message that still fails after 3 retries is parked here
+  - orders.events.dlq
+  - inventory.events.dlq
+  - payments.events.dlq
+  # Control plane (Phases 8-9): anomaly alerts for the agent, the agent's progress for the dashboard
+  - opspilot.incidents
+  - opspilot.timeline
