@@ -133,8 +133,9 @@ Non-root, layered (a code change replaces ~100 kB), for amd64 and arm64. Details
 **Kubernetes (Phase 4, in progress):**
 - `deploy/k3s/kind-up.sh` creates a local one-node kind cluster in about 1.5 minutes. It comes with OpsPilot's
   namespaces (strict Pod Security), metrics-server and the CloudNativePG operator.
-- `deploy/k3s/secrets-from-env.sh` and the [`postgres`](deploy/helm/README.md#postgres) Helm chart add PostgreSQL 16:
-  one database and login per service, checked by `helm test`.
+- `deploy/k3s/secrets-from-env.sh` and two Helm charts add the data layer, each checked by `helm test`:
+  - [`postgres`](deploy/helm/README.md#postgres): PostgreSQL 16, one database and login per service
+  - [`redis`](deploy/helm/README.md#redis): our own Redis chart (a StatefulSet)
 - Needs Docker Desktop with 5 GB; stop the Compose stack first.
 - Details: [deploy/k3s](deploy/k3s/README.md), [ADR 0009](docs/adr/0009-lean-local-kubernetes.md),
   [ADR 0010](docs/adr/0010-postgres-on-kubernetes.md).

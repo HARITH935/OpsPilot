@@ -1,0 +1,7 @@
+Redis "{{ .Release.Name }}" is starting in {{ .Release.Namespace }} (memory only, max {{ .Values.maxmemory }}).
+
+  Status:     kubectl get statefulset,pods,svc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+  Check it:   helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+  redis-cli:  kubectl exec -it {{ .Release.Name }}-0 -n {{ .Release.Namespace }} -- redis-cli   (logged in already)
+  Clients connect to: {{ .Release.Name }}.{{ .Release.Namespace }}.svc:6379
+    password: key "{{ .Values.passwordSecret.key }}" of Secret {{ .Values.passwordSecret.name }}

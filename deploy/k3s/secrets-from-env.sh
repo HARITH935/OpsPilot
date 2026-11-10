@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Creates the Kubernetes Secrets of the local kind cluster from deploy/docker/.env: the same passwords as the Compose
-# stack. Nothing secret goes into Git, onto a command line or onto the screen. The cloud cluster gets Sealed Secrets
+# stack (the three database logins, Redis). Nothing secret goes into Git, onto a command line or onto the screen. The cloud cluster gets Sealed Secrets
 # instead (Phase 5, ADR 0010). Run after kind-up.sh; running it again updates the Secrets.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -22,12 +22,17 @@ env_value() {
   printf '%s' "$value"
 }
 
+# Every value is read first: one missing value stops the script before anything is created
+orders_password=$(env_value ORDERS_DB_PASSWORD)
+inventory_password=$(env_value INVENTORY_DB_PASSWORD)
+payments_password=$(env_value PAYMENTS_DB_PASSWORD)
+redis_password=$(env_value REDIS_PASSWORD)
+
 # One login per service database, as a Secret "<database>-db" next to the database in opspilot-data (CloudNativePG
 # reads it only from its own namespace). Type basic-auth = the two keys "username" and "password", which CloudNativePG
 # expects. The label cnpg.io/reload makes it apply a changed password at once.
 db_secret() {
-  local db=$1 password
-  password=$(env_value "$2")
+  local db=$1 password=$2
   # create --dry-run only writes the Secret as YAML; apply then creates or updates it. The password goes through a
   # pipe (<(...)), never through the command line, where other programs on the machine could read it.
   kubectl create secret generic "$db-db" --namespace opspilot-data --type kubernetes.io/basic-auth \
@@ -38,6 +43,12 @@ db_secret() {
     kubectl apply --filename -
 }
 
-db_secret orders ORDERS_DB_PASSWORD
-db_secret inventory INVENTORY_DB_PASSWORD
-db_secret payments PAYMENTS_DB_PASSWORD
+db_secret orders "$orders_password"
+db_secret inventory "$inventory_password"
+db_secret payments "$payments_password"
+
+# Redis's password, next to Redis in opspilot-apps (the gateway and inventory-service run there too, step 4.4)
+kubectl create secret generic redis --namespace opspilot-apps \
+    --from-file password=<(printf '%s' "$redis_password") \
+    --dry-run=client --output yaml |
+  kubectl apply --filename -

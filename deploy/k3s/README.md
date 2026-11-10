@@ -19,6 +19,8 @@ deploy/k3s/secrets-from-env.sh                 # the Secrets, from deploy/docker
 helm upgrade --install postgres deploy/helm/postgres -n opspilot-data
 kubectl wait cluster/postgres -n opspilot-data --for=condition=Ready --timeout=6m   # first time: a few minutes (image download)
 helm test postgres -n opspilot-data            # logs in like a service: 11 checks
+helm upgrade --install redis deploy/helm/redis -n opspilot-apps   # ready in ~10 s
+helm test redis -n opspilot-apps               # password + settings: 9 checks
 kubectl get pods -A                            # everything that runs
 kubectl top node                               # CPU + memory (metrics-server)
 kind delete cluster --name opspilot            # delete: 1 s, nothing is kept
@@ -30,13 +32,14 @@ kind delete cluster --name opspilot            # delete: 1 s, nothing is kept
 | [`kind-up.sh`](kind-up.sh) | creates the cluster, applies the namespaces, installs metrics-server and the CloudNativePG operator |
 | [`metrics-server-values.yaml`](metrics-server-values.yaml) | metrics-server's settings (chart 3.14.0): small resources, `--kubelet-insecure-tls` (local only) |
 | [`cnpg-values.yaml`](cnpg-values.yaml) | the CloudNativePG operator's settings (chart 0.29.1 = operator 1.30.1): image pinned by digest, watches only `opspilot-data` |
-| [`secrets-from-env.sh`](secrets-from-env.sh) | creates the logins' Secrets from `deploy/docker/.env`; refuses missing or `change-me` values; safe to run again |
+| [`secrets-from-env.sh`](secrets-from-env.sh) | creates the Secrets from `deploy/docker/.env` (three database logins in `opspilot-data`, `redis` in `opspilot-apps`); refuses missing or `change-me` values; safe to run again |
 | [`../k8s/namespaces.yaml`](../k8s/namespaces.yaml) | `opspilot-apps` and `opspilot-data`, with Pod Security rules |
 | [`../helm/postgres`](../helm/README.md#postgres) | the PostgreSQL chart (step 4.2a) |
+| [`../helm/redis`](../helm/README.md#redis) | the Redis chart (step 4.2b) |
 
 **Pod Security.** Kubernetes checks every new pod against its namespace's level. Both namespaces enforce
 **restricted**: no root, no privilege escalation, all Linux capabilities dropped, seccomp on.
-- `opspilot-apps`: our images were built for this (step 3.1).
+- `opspilot-apps`: our images were built for this (step 3.1); Redis runs as its user 999 (step 4.2b).
 - `opspilot-data`: the CloudNativePG operator and PostgreSQL pass it too (step 4.2a; baseline before).
 
 **Secrets.** On this cluster they come from your `.env` file and are never in Git. The cloud cluster gets Sealed
@@ -49,3 +52,5 @@ Measured (2026-11-09, M2, Docker 4.8 GB):
 - With PostgreSQL (step 4.2a) the node uses ~1.1 GiB: operator 19 MiB, PostgreSQL 45 MiB at rest.
 - From nothing to a healthy database took 405 s, most of it downloading the 217 MB PostgreSQL image. A deleted
   PostgreSQL pod is back in ~13 s, with its data.
+- With PostgreSQL and Redis (step 4.2b) the node uses ~1.23 GiB; Redis itself 5 MiB. A deleted Redis pod is back as
+  `redis-0` in 4 s (empty: memory only). Scaled to 0 and back, it was ready in 3 s.

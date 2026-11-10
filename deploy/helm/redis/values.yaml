@@ -1,0 +1,23 @@
+# Default settings of the redis chart. The release name becomes the name of everything: "redis" (data plane, in
+# opspilot-apps, step 4.2b) and later "redis-control" (control plane, in opspilot-agent, Phase 12).
+
+# The same Redis as in Docker Compose: 7.4.12 on Alpine, the build of 2026-10-26, pinned by digest (amd64 + arm64)
+image: redis:7.4.12-alpine@sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f
+
+# The Secret (same namespace) whose key "password" Redis requires from every client. Created from deploy/docker/.env
+# by deploy/k3s/secrets-from-env.sh locally, a Sealed Secret in the cloud (Phase 5).
+passwordSecret:
+  name: redis
+  key: password
+
+# Like Compose: at most 64 MB of data; when full, the least recently used keys are dropped (it's a cache and
+# rate-limit counters, both fine to lose); nothing is written to disk, so a restart starts empty
+maxmemory: 64mb
+maxmemoryPolicy: allkeys-lru
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    memory: 128Mi    # 64 MB of data + Redis itself + headroom, as in Compose
