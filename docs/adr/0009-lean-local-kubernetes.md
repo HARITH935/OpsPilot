@@ -41,6 +41,11 @@ overhead. GitHub's standard runners have 16 GB.
 - **The Mac is at its limit:** with the empty cluster and nothing else running, macOS had 5.8 GB in swap and swapped
   ~140 MB in and ~50 MB out within 30 idle seconds. Postgres (4.2) is light; Kafka (4.3) and the services will push the
   Docker VM to its limit. **Decision point after 4.2:** continue locally, or move the heavy steps to the CI cluster only.
+- **Measured at the decision point (2026-11-10, after 4.2b):** with PostgreSQL, Redis and their operator the node
+  uses 1.23 GiB of Docker's 4.8 GB. Other projects' containers on the same Docker took another 0.57 GB. On the macOS
+  side, Docker's VM holds its full 5 GB, and the browser and editor take most of the rest. At rest the Mac swapped
+  187 MB in and 226 MB out within 30 s. Still to come: Kafka (4.3), the four services at ~0.3 GB each (4.4), Ingress
+  (4.5).
 - While the cluster runs, the Compose stack stays off (`docker compose … --profile apps down`), and the Mac runs as few
   other apps as possible.
 - The three-node, full-size proof depends on step 4.6's CI workflow.

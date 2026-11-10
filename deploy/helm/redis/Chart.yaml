@@ -1,0 +1,7 @@
+apiVersion: v2
+name: redis
+description: One Redis 7 (memory only, password from a Secret) as a StatefulSet; installed once per Redis OpsPilot needs
+type: application
+version: 0.1.0          # the chart's own version
+appVersion: "7.4.12"    # the Redis version it runs (values.yaml: image)
+kubeVersion: ">=1.34.0-0"

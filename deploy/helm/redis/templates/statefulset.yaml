@@ -1,0 +1,77 @@
+{{- /* A StatefulSet instead of a Deployment: its pod has a fixed name (<release>-0, not a random suffix) and a fixed
+       DNS name through the headless Service, and its pods start and stop in order. Chaos scenario C09 scales it to 0.
+       One replica: a second one would need Redis replication, which a cache doesn't need here.
+       No PodDisruptionBudget: with one replica it could only say "never take it down", which would block node
+       maintenance forever; losing the cache for a few seconds is fine (the services fail open, step 2.9a / 2.10). */}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "redis.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ .Release.Name }}-headless   # the headless Service that gives the pod its DNS name
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "redis.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "redis.labels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false   # Redis never talks to the Kubernetes API: give it no key for it
+      securityContext:                      # passes the "restricted" Pod Security level
+        runAsNonRoot: true
+        runAsUser: 999                      # "redis" in the image
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: {{ .Values.image }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true    # nothing is written: no snapshots, no append-only file
+            capabilities:
+              drop: [ALL]
+          env:
+            # The password. "REDISCLI_AUTH" is the name redis-cli looks for, so the health checks below and
+            # `kubectl exec <release>-0 -- redis-cli` log in with it, without the password on a command line.
+            - name: REDISCLI_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.passwordSecret.name }}
+                  key: {{ .Values.passwordSecret.key }}
+          command: ["sh", "-c"]
+          # The password goes in as configuration on standard input ("-"), through a heredoc: not as a command-line
+          # argument, so it can't be read in the process list. "exec" makes redis-server process 1, so it receives
+          # Kubernetes' stop signal itself and shuts down at once.
+          args:
+            - |
+              exec redis-server - --maxmemory {{ .Values.maxmemory }} --maxmemory-policy {{ .Values.maxmemoryPolicy }} --save "" --appendonly no <<EOF
+              requirepass $REDISCLI_AUTH
+              EOF
+          ports:
+            - name: redis
+              containerPort: 6379
+          # "redis-cli ping" answers PONG only when Redis works and the password is right. It exits with 0 even on an
+          # error, hence the grep.
+          startupProbe:          # while starting: check every 2 s, give up after 30 s
+            exec:
+              command: ["sh", "-c", "redis-cli ping | grep -q PONG"]
+            periodSeconds: 2
+            failureThreshold: 15
+          readinessProbe:        # not ready → the Service sends no traffic here
+            exec:
+              command: ["sh", "-c", "redis-cli ping | grep -q PONG"]
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:         # stuck for 30 s → Kubernetes restarts the container
+            exec:
+              command: ["sh", "-c", "redis-cli ping | grep -q PONG"]
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

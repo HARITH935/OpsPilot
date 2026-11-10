@@ -1,0 +1,33 @@
+{{- /* Two Services in front of the same pod:
+       - <release>: the address clients use (<release>.<namespace>.svc:6379). It has a fixed virtual IP, so a client
+         that remembers the address keeps working when the pod is replaced and gets a new IP.
+       - <release>-headless: no virtual IP ("clusterIP: None"); it exists for the StatefulSet, which gives its pod the
+         DNS name <release>-0.<release>-headless.<namespace>.svc through it. */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "redis.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "redis.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-headless
+  labels:
+    {{- include "redis.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "redis.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis

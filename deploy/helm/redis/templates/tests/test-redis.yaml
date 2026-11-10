@@ -1,0 +1,74 @@
+{{- /* helm test <release> -n <namespace>: starts this pod once and reports whether it succeeded.
+       It connects through the Service like the gateway and inventory-service will, and checks the password and the
+       settings. */}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}-test
+  labels:
+    {{- include "redis.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation   # keep the last test pod (and its log) until the next run
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: test
+      image: {{ .Values.image }}   # the Redis image: it has redis-cli, and it is already on the node
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 8Mi
+        limits:
+          memory: 32Mi
+      env:
+        - name: REDIS_HOST          # the client Service
+          value: {{ .Release.Name }}
+        - name: PASSWORD            # from the Secret, never written into the pod spec
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.passwordSecret.name }}
+              key: {{ .Values.passwordSecret.key }}
+      command: ["sh", "-c"]
+      args:
+        - |
+          failed=0
+          # cli <password> <command...>: one redis-cli call through the Service. An empty password = no login at all:
+          # REDISCLI_AUTH is then left out (set but empty, redis-cli would still log in, with an empty password).
+          cli() {
+            pw=$1; shift
+            if [ -z "$pw" ]; then redis-cli --raw -h "$REDIS_HOST" "$@" 2>&1
+            else REDISCLI_AUTH="$pw" redis-cli --no-auth-warning --raw -h "$REDIS_HOST" "$@" 2>&1; fi
+          }
+          # contains <what> <expected text> <actual>: passes if the actual output contains the expected text
+          contains() { case "$3" in *"$2"*) echo "ok    $1" ;; *) echo "FAIL  $1: expected '$2', got: $3"; failed=1 ;; esac; }
+          # equals <what> <expected> <actual>
+          equals() { if [ "$3" = "$2" ]; then echo "ok    $1"; else echo "FAIL  $1: expected '$2', got: '$3'"; failed=1; fi; }
+
+          equals   "no password: refused"    "NOAUTH Authentication required." "$(cli '' ping)"
+          contains "wrong password: refused" WRONGPASS "$(cli not-the-password ping)"
+          equals   "right password: PONG"    PONG      "$(cli "$PASSWORD" ping)"
+
+          equals "write a key (expires in 60 s)" OK    "$(cli "$PASSWORD" set helm-test:key hello EX 60)"
+          equals "read it back"                  hello "$(cli "$PASSWORD" get helm-test:key)"
+          cli "$PASSWORD" del helm-test:key > /dev/null
+
+          maxmemory=$(cli "$PASSWORD" config get maxmemory | tail -n 1)
+          if [ "${maxmemory:-0}" -gt 0 ] 2>/dev/null; then echo "ok    memory limit set ($maxmemory bytes)"; else echo "FAIL  no memory limit: '$maxmemory'"; failed=1; fi
+          equals "full → drop least recently used keys" {{ .Values.maxmemoryPolicy }} "$(cli "$PASSWORD" config get maxmemory-policy | tail -n 1)"
+          equals "no snapshots to disk"   ""  "$(cli "$PASSWORD" config get save | tail -n 1)"
+          equals "no append-only file"    no  "$(cli "$PASSWORD" config get appendonly | tail -n 1)"
+
+          exit $failed
