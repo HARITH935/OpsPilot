@@ -1,0 +1,115 @@
+{{- /* helm test <release> -n <namespace>: one customer's visit through the gateway, like the end-to-end tests do in
+       Compose. Logs in, buys one SKU-6, waits until the saga has CONFIRMED the order, and checks the payment and the
+       stock. Each run buys one more (SKU-6 starts with 300). */}}
+{{- $gateway := index .Values "api-gateway" }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}-test-order
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}-test
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation   # keep the last test pod (and its log) until the next run
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: test
+      # The gateway's image: it has sh and curl, and it is already on the node
+      image: {{ printf "%s/%s:%s" .Values.global.image.registry $gateway.image.name ($gateway.image.tag | default .Values.global.image.tag) }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          memory: 64Mi
+      env:
+        - name: GATEWAY
+          value: http://api-gateway:{{ $gateway.port }}
+        - name: DEMO_USERS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: gateway-demo-users
+              key: password
+      command: ["sh", "-c"]
+      args:
+        - |
+          failed=0
+          ok()  { echo "ok    $*"; }
+          bad() { echo "FAIL  $*"; failed=1; }
+          # field <name> <json>: the value of "name" in a flat JSON answer (enough for these few fields)
+          field() { printf '%s' "$2" | sed -n 's/.*"'"$1"'":"\{0,1\}\([^",}]*\).*/\1/p'; }
+          # call <method> <path> [curl options...]: prints the answer's body, then its HTTP status on the last line.
+          # With "-d @-" the request body is read from stdin.
+          call() { m=$1; p=$2; shift 2; curl -s -m 10 -X "$m" -H 'Content-Type: application/json' -w '\n%{http_code}' "$@" "$GATEWAY$p"; }
+          status_of() { printf '%s' "$1" | tail -n 1; }
+          body_of()   { printf '%s' "$1" | sed '$d'; }
+          # get <path>: a read, repeated (up to 5 times, 2 s apart) while the answer is a 5xx. Reads are safe to repeat;
+          # a service that just started, or a busy laptop, can be slower than the gateway's 2 s limit (measured).
+          get() { for t in 1 2 3 4 5; do r=$(call GET "$1"); case "$(status_of "$r")" in 5*) sleep 2 ;; *) break ;; esac; done; printf '%s' "$r"; }
+
+          # 1. The gateway answers and is ready
+          a=$(get /actuator/health/readiness)
+          [ "$(status_of "$a")" = 200 ] && ok "gateway ready" || bad "gateway readiness: $(status_of "$a")"
+
+          # 2. A demo user can log in (proves the demo-users Secret and the JWT key pair from gateway-jwt)
+          a=$(printf '{"username":"viewer","password":"%s"}' "$DEMO_USERS_PASSWORD" | call POST /auth/token -d @-)
+          token=$(field access_token "$(body_of "$a")")
+          [ "$(status_of "$a")" = 200 ] && [ -n "$token" ] && ok "login as viewer: token received" || bad "login: $(status_of "$a")"
+          a=$(get /.well-known/jwks.json)
+          case "$(body_of "$a")" in *'"kid"'*) ok "public key published (JWKS)" ;; *) bad "JWKS: $(body_of "$a")" ;; esac
+
+          # 3. Buy one SKU-6: 202 Accepted with the order's id. Like a careful client: with an Idempotency-Key, and after a
+          #    timeout (504) or a refusal (503) the same request again with the same key. The order service then answers
+          #    with the order it already made (header Idempotent-Replayed), never a second one. A cold service right after
+          #    a start can be slower than the gateway's 2 s limit.
+          stock_now() { field stock "$(body_of "$(get /api/products/SKU-6)")"; }
+          before=""
+          for i in $(seq 1 30); do before=$(stock_now); [ -n "$before" ] && break; sleep 1; done
+          [ -n "$before" ] || bad "could not read the stock of SKU-6"
+          key="helm-test-$(date +%s)"
+          order=""
+          for attempt in 1 2 3 4 5; do
+            a=$(printf '{"customerId":"helm-test","items":[{"sku":"SKU-6","qty":1}]}' |
+                call POST /api/orders -d @- -H "Idempotency-Key: $key")
+            code=$(status_of "$a")
+            [ "$code" = 202 ] && { order=$(field orderId "$(body_of "$a")"); break; }
+            echo "      attempt $attempt: $code, again with the same key"
+            sleep 2
+          done
+          [ -n "$order" ] && ok "order placed: $order (attempt $attempt)" || bad "POST /api/orders: $code $(body_of "$a")"
+
+          # 4. The saga decides within 40 s (its timeout is 30 s): inventory reserves, payment charges, order confirms
+          state=""
+          if [ -n "$order" ]; then
+            for i in $(seq 1 40); do
+              state=$(field status "$(body_of "$(get "/api/orders/$order")")")
+              case "$state" in CONFIRMED|CANCELLED) break ;; esac
+              sleep 1
+            done
+          fi
+          [ "$state" = CONFIRMED ] && ok "order CONFIRMED after ~${i} s" || bad "order ended as '$state', expected CONFIRMED"
+
+          # 5. The payment exists, and the stock went down by one (read through inventory's cache: up to 65 s)
+          # (one payment per "{...}" in the list: split there, keep this order's, look for its status)
+          payment=$(body_of "$(get '/api/payments?size=20')" | tr '{' '\n' | grep "\"$order\"")
+          case "$payment" in *'"COMPLETED"'*) ok "payment COMPLETED" ;; *) bad "payment of $order: '$payment'" ;; esac
+          expected=$((before - 1)); now=""
+          for i in $(seq 1 65); do now=$(stock_now); [ "$now" = "$expected" ] && break; sleep 1; done
+          [ "$now" = "$expected" ] && ok "stock of SKU-6: $before -> $now" || bad "stock of SKU-6: $now, expected $expected"
+
+          exit $failed

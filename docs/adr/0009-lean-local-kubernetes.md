@@ -49,6 +49,12 @@ overhead. GitHub's standard runners have 16 GB.
 - **Decision (2026-11-10): continue locally** (option A). The extra workloads stay inside Docker's VM, which macOS
   already counts in full. Rule: a step moves to the CI cluster if a pod is killed for lack of memory, or Docker uses
   more than ~4.3 GB. After Kafka (4.3): ~2.5 GB.
+- **After the whole shop (4.4, 2026-11-11):** Docker ~3.6 GB, so the rule held, but it misses other signs:
+  - macOS swapped ~7-8 GB in and out per 30 idle seconds
+  - the gateway logged timeouts
+  - the operators kept losing leader election
+  - Docker's VM clock fell minutes behind and jumped, which cancelled orders via the saga timeout
+  Next decision (open): move the heavy checks to the CI cluster now, or lighten the laptop and stay.
 - While the cluster runs, the Compose stack stays off (`docker compose … --profile apps down`), and the Mac runs as few
   other apps as possible.
 - The three-node, full-size proof depends on step 4.6's CI workflow.

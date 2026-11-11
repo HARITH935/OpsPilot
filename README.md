@@ -137,9 +137,13 @@ Non-root, layered (a code change replaces ~100 kB), for amd64 and arm64. Details
   - [`postgres`](deploy/helm/README.md#postgres): PostgreSQL 16, one database and login per service
   - [`redis`](deploy/helm/README.md#redis): our own Redis chart (a StatefulSet)
   - [`kafka`](deploy/helm/README.md#kafka): Kafka 4.2.2 and its 8 topics, run by the Strimzi operator
+- `deploy/k3s/shop-up.sh` brings up the whole shop: Secrets, the data layer, then the four services from one
+  [generic chart](deploy/helm/README.md#opspilot-the-four-services). `helm test opspilot -n opspilot-apps` places an
+  order through the gateway and waits until it is CONFIRMED.
 - Needs Docker Desktop with 5 GB; stop the Compose stack first.
 - Details: [deploy/k3s](deploy/k3s/README.md), [ADR 0009](docs/adr/0009-lean-local-kubernetes.md),
-  [ADR 0010](docs/adr/0010-postgres-on-kubernetes.md), [ADR 0011](docs/adr/0011-kafka-on-kubernetes.md).
+  [ADR 0010](docs/adr/0010-postgres-on-kubernetes.md), [ADR 0011](docs/adr/0011-kafka-on-kubernetes.md),
+  [ADR 0012](docs/adr/0012-one-generic-service-chart.md).
 
 ## What Phase 2 can do
 | | Shown by | Result (real runs, 2026-11-04) |

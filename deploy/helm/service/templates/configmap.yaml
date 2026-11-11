@@ -1,0 +1,12 @@
+{{- /* The service's plain settings (addresses, timeouts, ...). Never a password: those come from Secrets. */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Chart.Name }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+data:
+  SERVER_PORT: {{ .Values.port | quote }}
+  {{- range $name, $value := .Values.env }}
+  {{ $name }}: {{ $value | quote }}
+  {{- end }}

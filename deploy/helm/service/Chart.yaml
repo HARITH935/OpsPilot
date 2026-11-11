@@ -1,0 +1,6 @@
+apiVersion: v2
+name: service
+description: One OpsPilot Spring Boot service (Deployment, Service, ConfigMap, PodDisruptionBudget); used four times by the umbrella chart opspilot
+type: application
+version: 0.1.0
+kubeVersion: ">=1.34.0-0"

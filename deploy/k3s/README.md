@@ -15,18 +15,27 @@ control plane and the worker at the same time: three don't fit on an 8 GB Mac. T
 
 ```bash
 deploy/k3s/kind-up.sh                          # create: ~3.5 min (two operators), ends with the node "Ready"
-deploy/k3s/secrets-from-env.sh                 # the Secrets, from deploy/docker/.env (same passwords as Compose)
-helm upgrade --install postgres deploy/helm/postgres -n opspilot-data
-kubectl wait cluster/postgres -n opspilot-data --for=condition=Ready --timeout=6m   # first time: a few minutes (image download)
-helm test postgres -n opspilot-data            # logs in like a service: 11 checks
-helm upgrade --install redis deploy/helm/redis -n opspilot-apps   # ready in ~10 s
-helm test redis -n opspilot-apps               # password + settings: 9 checks
-helm upgrade --install kafka deploy/helm/kafka -n opspilot-data
-kubectl wait kafka/kafka -n opspilot-data --for=condition=Ready --timeout=10m      # first time: ~4.5 min
-helm test kafka -n opspilot-data               # topics, keys, auto-create off: 13 checks
+deploy/k3s/shop-up.sh                          # the whole shop: Secrets, postgres, kafka, redis, the 4 services
+helm test opspilot -n opspilot-apps            # an order through the gateway → CONFIRMED (7 checks)
+kubectl port-forward -n opspilot-apps svc/api-gateway 8080:8080   # the shop on localhost:8080 (Ingress: step 4.5)
 kubectl get pods -A                            # everything that runs
 kubectl top node                               # CPU + memory (metrics-server)
-kind delete cluster --name opspilot            # delete: 1 s, nothing is kept
+docker stop opspilot-control-plane             # pause: frees the memory, keeps the cluster and its downloaded images
+docker start opspilot-control-plane            # ...and back (~3 min until everything is ready again)
+kind delete cluster --name opspilot            # delete: 1 s, nothing is kept (the next start downloads ~1 GB again)
+```
+
+Each part on its own (what `shop-up.sh` does, in this order):
+
+```bash
+deploy/k3s/secrets-from-env.sh                 # the Secrets, from deploy/docker/.env (same passwords as Compose)
+helm upgrade --install postgres deploy/helm/postgres -n opspilot-data
+kubectl wait cluster/postgres -n opspilot-data --for=condition=Ready --timeout=10m
+helm upgrade --install kafka deploy/helm/kafka -n opspilot-data
+kubectl wait kafka/kafka -n opspilot-data --for=condition=Ready --timeout=12m
+helm upgrade --install redis deploy/helm/redis -n opspilot-apps --wait
+helm dependency build deploy/helm/opspilot && helm upgrade --install opspilot deploy/helm/opspilot -n opspilot-apps --wait --timeout 10m
+helm test postgres -n opspilot-data            # 11 checks; also: helm test redis -n opspilot-apps (9), helm test kafka -n opspilot-data (13)
 ```
 
 | File | What it is |
@@ -36,11 +45,13 @@ kind delete cluster --name opspilot            # delete: 1 s, nothing is kept
 | [`metrics-server-values.yaml`](metrics-server-values.yaml) | metrics-server's settings (chart 3.14.0): small resources, `--kubelet-insecure-tls` (local only) |
 | [`cnpg-values.yaml`](cnpg-values.yaml) | the CloudNativePG operator's settings (chart 0.29.1 = operator 1.30.1): image pinned by digest, watches only `opspilot-data` |
 | [`strimzi-values.yaml`](strimzi-values.yaml) | the Strimzi operator's settings (chart 1.3.0): images pinned by digest, every Kafka pod set up for "restricted" |
-| [`secrets-from-env.sh`](secrets-from-env.sh) | creates the Secrets from `deploy/docker/.env` (three database logins in `opspilot-data`, `redis` in `opspilot-apps`); refuses missing or `change-me` values; safe to run again |
+| [`secrets-from-env.sh`](secrets-from-env.sh) | creates the Secrets from `deploy/docker/.env`: the three database logins (in `opspilot-data` and `opspilot-apps`), `redis`, `gateway-demo-users`; and the gateway's key pair `gateway-jwt` (made once with `openssl`, then kept); refuses missing or `change-me` values; safe to run again |
+| [`shop-up.sh`](shop-up.sh) | the whole shop in order: Secrets, postgres, kafka, redis, then the four services (umbrella chart), waiting for each; always the charts' values (`--reset-values`); safe to run again (8 s when all runs) |
 | [`../k8s/namespaces.yaml`](../k8s/namespaces.yaml) | `opspilot-apps` and `opspilot-data`, with Pod Security rules |
 | [`../helm/postgres`](../helm/README.md#postgres) | the PostgreSQL chart (step 4.2a) |
 | [`../helm/redis`](../helm/README.md#redis) | the Redis chart (step 4.2b) |
 | [`../helm/kafka`](../helm/README.md#kafka) | the Kafka chart (step 4.3) |
+| [`../helm/opspilot`](../helm/README.md#opspilot-the-four-services) | the four services: the umbrella chart over the generic chart `service` (step 4.4) |
 
 **Pod Security.** Kubernetes checks every new pod against its namespace's level. Both namespaces enforce
 **restricted**: no root, no privilege escalation, all Linux capabilities dropped, seccomp on.
@@ -63,3 +74,16 @@ Measured (2026-11-09, M2, Docker 4.8 GB):
 - With Kafka (step 4.3) the node uses ~2.06 GiB: broker 466 MiB, Strimzi 271 MiB, Topic Operator 156 MiB. Docker
   as a whole ~2.5 of 4.8 GB, under the 4.3 GB rule of ADR 0009. `kind-up.sh` 204 s; Kafka ready 264 s later. A
   deleted broker pod is back in 23 s, with its topics and messages.
+- With the whole shop (step 4.4, 2026-11-11) the node uses ~3.7 GiB (each service 256-359 MiB), Docker ~3.6 of 4.8 GB.
+  On a slow connection (~190 KB/s that day) the first `shop-up.sh` took over an hour of downloads; a re-run on a running
+  shop 8 s. `docker stop` took 4 s; after `docker start` everything was ready again in 197 s.
+
+**The laptop's limit (step 4.4).** The memory rule (Docker under 4.3 GB) held, but with the whole shop running:
+- macOS swapped ~7-8 GB in and out per 30 idle seconds
+- the gateway logged route and Redis timeouts
+- both operators kept restarting with "leader election lost"
+- **Docker's VM clock fell behind the Mac** (measured: 8.5 minutes) and was later corrected with a jump. After such
+  a jump the saga's timeout job sees every open order as old and cancels it (`TIMEOUT`), and leases expire.
+
+The fresh runs passed every check; after a stop / start on the stressed laptop, orders were cancelled by such clock
+jumps. Restarting Docker Desktop resets the clock (it also stops every other container).

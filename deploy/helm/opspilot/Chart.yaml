@@ -1,0 +1,26 @@
+apiVersion: v2
+name: opspilot
+description: The OpsPilot shop on Kubernetes - the four services, each from the generic chart deploy/helm/service
+type: application
+version: 0.1.0
+kubeVersion: ">=1.34.0-0"
+# The same chart four times: "alias" gives each copy its own name, and that name is the service's name (Deployment,
+# Service, ConfigMap). Each copy's settings are under its alias in values.yaml. "file://" = from this repository;
+# `helm dependency build deploy/helm/opspilot` packs it into charts/ (deploy/k3s/shop-up.sh does that).
+dependencies:
+  - name: service
+    alias: order-service
+    version: 0.1.0
+    repository: file://../service
+  - name: service
+    alias: inventory-service
+    version: 0.1.0
+    repository: file://../service
+  - name: service
+    alias: payment-service
+    version: 0.1.0
+    repository: file://../service
+  - name: service
+    alias: api-gateway
+    version: 0.1.0
+    repository: file://../service
