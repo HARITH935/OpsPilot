@@ -1,0 +1,95 @@
+{{- /* helm test <release> -n <namespace>: starts this pod once and reports whether it succeeded. The same checks as
+       deploy/docker/kafka/smoke-test.sh for Compose, through the address the services will use. It writes only to a
+       throwaway topic (deleted at the end), never to the real ones. */}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}-test
+  labels:
+    {{- include "kafka.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation   # keep the last test pod (and its log) until the next run
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:              # passes the "restricted" Pod Security level
+    runAsNonRoot: true
+    runAsUser: 1001             # the "kafka" user of Strimzi's images
+    seccompProfile:
+      type: RuntimeDefault
+  volumes:
+    - name: tmp
+      emptyDir: {}
+  containers:
+    - name: test
+      image: {{ .Values.image }}   # the Kafka image: it has Kafka's command-line tools, and it is already on the node
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp       # the tools' Java needs a writable /tmp
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          memory: 512Mi
+      env:
+        - name: BOOTSTRAP
+          value: {{ .Release.Name }}-kafka-bootstrap:9092
+        - name: KAFKA_HEAP_OPTS   # each tool is a small Java program: keep it small
+          value: -Xmx128m
+        - name: LOG_DIR           # Kafka's scripts want a log folder; the root file system is read-only
+          value: /tmp/logs
+      command: ["bash", "-c"]
+      args:
+        - |
+          failed=0
+          ok()  { echo "ok    $*"; }
+          bad() { echo "FAIL  $*"; failed=1; }
+          # cli <tool> <arguments...>: one of Kafka's tools, against the cluster
+          cli() { tool=$1; shift; "/opt/kafka/bin/$tool" --bootstrap-server "$BOOTSTRAP" "$@"; }
+
+          # 1. Every topic exists with {{ .Values.partitions }} partitions
+          described=$(cli kafka-topics.sh --describe --exclude-internal 2>&1)
+          for topic in {{ join " " .Values.topics }}; do
+            # The topic's summary line reads: "Topic: <name>  TopicId: ...  PartitionCount: 3  ..."
+            partitions=$(awk -v t="$topic" '$1 == "Topic:" && $2 == t {
+              for (i = 3; i < NF; i++) if ($i == "PartitionCount:") print $(i + 1) }' <<<"$described")
+            if [ "$partitions" = "{{ .Values.partitions }}" ]; then ok "topic $topic: $partitions partitions"
+            else bad "topic $topic: '${partitions:-missing}' partitions, expected {{ .Values.partitions }}"; fi
+          done
+
+          # 2. Same key -> same partition, in the order sent (why the services use the order id as the key)
+          test_topic=helm-test-$(date +%s)
+          cli kafka-topics.sh --create --topic "$test_topic" --partitions 3 --replication-factor 1 > /dev/null
+          trap 'cli kafka-topics.sh --delete --topic "$test_topic" > /dev/null 2>&1' EXIT   # clean up, even after a failure
+          printf '%s\n' order-A:A1 order-B:B1 order-A:A2 order-C:C1 order-B:B2 order-A:A3 |
+            cli kafka-console-producer.sh --topic "$test_topic" --reader-property parse.key=true --reader-property key.separator=:
+          # Each line read back: "Partition:<n> <tab> <key> <tab> <value>"
+          received=$(cli kafka-console-consumer.sh --topic "$test_topic" --from-beginning --max-messages 6 --timeout-ms 20000 \
+            --formatter-property print.partition=true --formatter-property print.key=true 2>/dev/null)
+          check_key() {   # check_key <key> <the values sent with that key, in order>
+            lines=$(awk -F '\t' -v k="$1" '$2 == k' <<<"$received")
+            partitions=$(cut -f1 <<<"$lines" | sort -u)
+            values=$(cut -f3 <<<"$lines" | xargs)
+            if [ "$values" = "$2" ] && [ "$(wc -l <<<"$partitions")" -eq 1 ]; then ok "key $1 -> ${partitions/Partition:/partition } only, in order: $values"
+            else bad "key $1: got '$values' in '$(xargs <<<"$partitions")', expected '$2' in one partition"; fi
+          }
+          check_key order-A "A1 A2 A3"
+          check_key order-B "B1 B2"
+          check_key order-C "C1"
+
+          # 3. A misspelled topic is refused instead of being created (auto-create is off). The producer exits with 0
+          #    even when sending fails, so check its error message and the topic list instead.
+          refused=$(echo hello | cli kafka-console-producer.sh --topic orders.event --command-property max.block.ms=5000 2>&1)
+          if grep -q "not present in metadata" <<<"$refused"; then ok "misspelled topic orders.event: refused"
+          else bad "sending to the misspelled topic orders.event did not fail"; fi
+          if cli kafka-topics.sh --list | grep -qx orders.event; then bad "Kafka created the misspelled topic orders.event"
+          else ok "misspelled topic orders.event: not created"; fi
+
+          exit $failed

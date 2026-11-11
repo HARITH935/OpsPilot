@@ -1,0 +1,7 @@
+apiVersion: v2
+name: kafka
+description: OpsPilot's Kafka 4.2 (one KRaft node) and its topics, run by the Strimzi operator
+type: application
+version: 0.1.0          # the chart's own version
+appVersion: "4.2.2"     # the Kafka version it runs (values.yaml: version, image)
+kubeVersion: ">=1.32.0-0"   # Strimzi 1.3 supports Kubernetes 1.32 and newer

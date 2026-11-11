@@ -46,6 +46,9 @@ overhead. GitHub's standard runners have 16 GB.
   side, Docker's VM holds its full 5 GB, and the browser and editor take most of the rest. At rest the Mac swapped
   187 MB in and 226 MB out within 30 s. Still to come: Kafka (4.3), the four services at ~0.3 GB each (4.4), Ingress
   (4.5).
+- **Decision (2026-11-10): continue locally** (option A). The extra workloads stay inside Docker's VM, which macOS
+  already counts in full. Rule: a step moves to the CI cluster if a pod is killed for lack of memory, or Docker uses
+  more than ~4.3 GB. After Kafka (4.3): ~2.5 GB.
 - While the cluster runs, the Compose stack stays off (`docker compose … --profile apps down`), and the Mac runs as few
   other apps as possible.
 - The three-node, full-size proof depends on step 4.6's CI workflow.

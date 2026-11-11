@@ -131,14 +131,15 @@ JDK or Maven on your machine: `cd services && docker build --build-arg SERVICE=o
 Non-root, layered (a code change replaces ~100 kB), for amd64 and arm64. Details: [services/README.md](services/README.md#container-images).
 
 **Kubernetes (Phase 4, in progress):**
-- `deploy/k3s/kind-up.sh` creates a local one-node kind cluster in about 1.5 minutes. It comes with OpsPilot's
-  namespaces (strict Pod Security), metrics-server and the CloudNativePG operator.
+- `deploy/k3s/kind-up.sh` creates a local one-node kind cluster in about 3.5 minutes. It comes with OpsPilot's
+  namespaces (strict Pod Security), metrics-server and the operators for PostgreSQL (CloudNativePG) and Kafka (Strimzi).
 - `deploy/k3s/secrets-from-env.sh` and two Helm charts add the data layer, each checked by `helm test`:
   - [`postgres`](deploy/helm/README.md#postgres): PostgreSQL 16, one database and login per service
   - [`redis`](deploy/helm/README.md#redis): our own Redis chart (a StatefulSet)
+  - [`kafka`](deploy/helm/README.md#kafka): Kafka 4.2.2 and its 8 topics, run by the Strimzi operator
 - Needs Docker Desktop with 5 GB; stop the Compose stack first.
 - Details: [deploy/k3s](deploy/k3s/README.md), [ADR 0009](docs/adr/0009-lean-local-kubernetes.md),
-  [ADR 0010](docs/adr/0010-postgres-on-kubernetes.md).
+  [ADR 0010](docs/adr/0010-postgres-on-kubernetes.md), [ADR 0011](docs/adr/0011-kafka-on-kubernetes.md).
 
 ## What Phase 2 can do
 | | Shown by | Result (real runs, 2026-11-04) |

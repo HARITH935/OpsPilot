@@ -8,6 +8,7 @@ templates and applies them as one **release**, which can be upgraded, tested and
 |---|---|---|
 | [`postgres`](postgres/) | PostgreSQL 16 with a database + login per service, run by the CloudNativePG operator ([ADR 0010](../../docs/adr/0010-postgres-on-kubernetes.md)) | 4.2a |
 | [`redis`](redis/) | one Redis 7 (memory only, password from a Secret) as a StatefulSet; installed as `redis` now, as `redis-control` in Phase 12 | 4.2b |
+| [`kafka`](kafka/) | Kafka 4.2.2 (one KRaft node) and the 8 topics, run by the Strimzi operator ([ADR 0011](../../docs/adr/0011-kafka-on-kubernetes.md)) | 4.3 |
 
 ## postgres
 Needs the CloudNativePG operator and the logins' Secrets in the namespace: on the local cluster both come from
@@ -62,3 +63,29 @@ Clients connect to `redis.opspilot-apps.svc:6379`. Design choices:
   maintenance forever. A second copy would need Redis replication.
 - **`exec redis-server`.** Redis is process 1, so it gets Kubernetes' stop signal itself: a pod is deleted in ~1 s
   instead of being killed after 30 s.
+
+## kafka
+Needs the Strimzi operator in the namespace: on the local cluster from [`deploy/k3s/kind-up.sh`](../k3s/kind-up.sh).
+No Secrets: the listener is plain, with no login (like Compose).
+
+```bash
+helm upgrade --install kafka deploy/helm/kafka -n opspilot-data
+kubectl wait kafka/kafka -n opspilot-data --for=condition=Ready --timeout=10m   # Helm's --wait can't tell
+kubectl get kafka,kafkanodepool,kafkatopic,pods -n opspilot-data
+helm test kafka -n opspilot-data && kubectl logs kafka-test -n opspilot-data
+kubectl exec -it kafka-dual-role-0 -n opspilot-data -- /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+```
+
+| File | What it is |
+|---|---|
+| [`values.yaml`](kafka/values.yaml) | Kafka version + metadata version, the image (Strimzi 1.3.0 + Kafka 4.2.2, pinned by digest), heap / disk / memory of the node, the Topic Operator's memory, the 8 topics (same list as [`topics.txt`](../docker/kafka/topics.txt)) |
+| [`templates/kafka.yaml`](kafka/templates/kafka.yaml) | the `KafkaNodePool` (one node: controller + broker, KRaft) and the `Kafka` (plain listener 9092, broker settings, only the Topic Operator) |
+| [`templates/topics.yaml`](kafka/templates/topics.yaml) | one `KafkaTopic` per topic: 3 partitions, 1 replica |
+| [`templates/tests/test-kafka.yaml`](kafka/templates/tests/test-kafka.yaml) | the `helm test` pod, the checks of Compose's `smoke-test.sh`: 8 topics × 3 partitions, same key → same partition in order, a misspelled topic refused |
+
+Clients connect to `kafka-kafka-bootstrap.opspilot-data.svc:9092`. Worth knowing:
+- **Topics are Kubernetes objects.** `kubectl get kafkatopic` shows them; the Topic Operator creates, changes and
+  deletes the real topics to match. Deleting a `KafkaTopic` (or `helm uninstall kafka`) deletes the topic and its messages.
+- **Partitions can only grow.** Lowering `partitions` makes the `KafkaTopic` report `Decreasing partitions not supported`;
+  the only way back is deleting and recreating the topic.
+- **A config change restarts the broker.** Strimzi does it by itself (measured: 26 s), one pod at a time.

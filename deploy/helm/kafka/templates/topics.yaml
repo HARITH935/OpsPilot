@@ -1,0 +1,15 @@
+{{- /* One KafkaTopic object per topic: the Topic Operator creates it in Kafka with these settings. Deleting the
+       object (e.g. helm uninstall) deletes the topic and its messages. */}}
+{{- range .Values.topics }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: {{ . }}   # the topic's name in Kafka
+  labels:
+    {{- include "kafka.labels" $ | nindent 4 }}
+    strimzi.io/cluster: {{ $.Release.Name }}
+spec:
+  partitions: {{ $.Values.partitions }}
+  replicas: 1     # one broker, so one copy
+{{- end }}

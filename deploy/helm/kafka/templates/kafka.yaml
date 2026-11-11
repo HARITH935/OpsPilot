@@ -1,0 +1,63 @@
+{{- /* The Kafka cluster, in Strimzi's words: a node pool (the machines: how many, which roles, disk, memory) and the
+       Kafka object (the version, the listeners, the broker settings, the Topic Operator). Strimzi creates the pod
+       <release>-dual-role-0, its disk, the Services (<release>-kafka-bootstrap = the address clients use) and keeps
+       them that way. */}}
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: dual-role
+  labels:
+    {{- include "kafka.labels" . | nindent 4 }}
+    strimzi.io/cluster: {{ .Release.Name }}   # which Kafka cluster this pool belongs to
+spec:
+  replicas: 1
+  roles:          # KRaft mode: no ZooKeeper; the node is controller and broker at once (like Compose)
+    - controller
+    - broker
+  storage:
+    type: jbod    # "just a bunch of disks": a list of volumes; here one
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: {{ .Values.node.storage }}
+        kraftMetadata: shared   # the KRaft metadata lives on this volume too
+  jvmOptions:
+    "-Xms": {{ .Values.node.heap | quote }}
+    "-Xmx": {{ .Values.node.heap | quote }}
+  resources:
+    {{- toYaml .Values.node.resources | nindent 4 }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "kafka.labels" . | nindent 4 }}
+spec:
+  kafka:
+    version: {{ .Values.version }}
+    metadataVersion: {{ .Values.metadataVersion }}
+    image: {{ .Values.image }}
+    listeners:
+      # Port 9092 inside the cluster, plain (no TLS, no login), like Compose. Who may connect at all is limited by
+      # NetworkPolicies (step 4.5). Strimzi adds its own TLS listener for the controller and replication traffic.
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+    config:
+      # One broker, so Kafka's internal topics keep one copy (the defaults expect 3 brokers)
+      offsets.topic.replication.factor: 1
+      transaction.state.log.replication.factor: 1
+      transaction.state.log.min.isr: 1
+      share.coordinator.state.topic.replication.factor: 1
+      share.coordinator.state.topic.min.isr: 1
+      default.replication.factor: 1
+      min.insync.replicas: 1
+      auto.create.topics.enable: false    # topics come only from the KafkaTopic objects; a misspelled one fails loudly
+      group.initial.rebalance.delay.ms: 0 # a new consumer starts at once (the default waits 3 s for others)
+  entityOperator:
+    # Only the Topic Operator. The User Operator (Kafka logins) is left out: there are no Kafka logins (yet).
+    topicOperator:
+      resources:
+        {{- toYaml .Values.topicOperator.resources | nindent 8 }}

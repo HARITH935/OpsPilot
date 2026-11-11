@@ -1,0 +1,7 @@
+Kafka "{{ .Release.Name }}" is being set up by Strimzi in {{ .Release.Namespace }} (Kafka {{ .Values.version }}, one KRaft node).
+
+  Wait:       kubectl wait kafka/{{ .Release.Name }} -n {{ .Release.Namespace }} --for=condition=Ready --timeout=10m
+  Status:     kubectl get kafka,kafkanodepool,kafkatopic,pods -n {{ .Release.Namespace }}
+  Check it:   helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+  Clients connect to: {{ .Release.Name }}-kafka-bootstrap.{{ .Release.Namespace }}.svc:9092 (plain, no login)
+  Topics ({{ .Values.partitions }} partitions each): {{ join ", " .Values.topics }}
