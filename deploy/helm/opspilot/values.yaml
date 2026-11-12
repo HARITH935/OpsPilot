@@ -39,7 +39,7 @@ payment-service:
   env:
     DB_URL: jdbc:postgresql://postgres-rw.opspilot-data.svc:5432/payments
     KAFKA_BOOTSTRAP_SERVERS: kafka-kafka-bootstrap.opspilot-data.svc:9092
-    PAYMENT_FAILURE_RATE: "0.0"   # the simulated provider: share of payments that fail (chaos C12 raises it)
+    PAYMENT_FAILURE_RATE: "1.0"   # the simulated provider: share of payments that fail (chaos C12 raises it)
     PAYMENT_LATENCY_MS: "100"     # and how long each takes
   secretEnv:
     DB_USERNAME: {secret: payments-db, key: username}
