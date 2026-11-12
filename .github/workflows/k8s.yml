@@ -1,8 +1,9 @@
 # The full-size Kubernetes check (step 4.5, ADR 0009): a three-node kind cluster on the runner, the whole shop
 # installed with the same scripts as on the laptop (kind-up.sh, shop-up.sh), then every chart's helm test and an
-# order from outside through the front door (front-door-check.sh) and the network rules (network-policy-check.sh). Runs on
-# every pull request to main and every push to main that can change what it installs (deploy/helm, deploy/k3s,
-# deploy/k8s, this file, the tools script). A PR can only be merged when this passes (required check "k8s").
+# order from outside through the front door (front-door-check.sh), the network rules (network-policy-check.sh) and
+# the HPAs under real load (hpa-check.sh, step 4.7a). Runs on every pull request to main and every push to main that
+# can change what it installs (deploy/helm, deploy/k3s, deploy/k8s, loadgen, this file, the tools script). A PR can
+# only be merged when this passes (required check "k8s").
 # The images are the ones named in deploy/helm/opspilot/values.yaml, exactly what would be deployed; changes to the
 # services' code are tested by the e2e workflow (Compose).
 name: k8s
@@ -34,7 +35,7 @@ jobs:
         run: |
           changed=$(git diff --name-only HEAD^1 HEAD)
           echo "Changed files:"; echo "$changed"
-          if echo "$changed" | grep -qE '^(deploy/helm/|deploy/k3s/|deploy/k8s/|\.github/workflows/k8s\.yml$|\.github/scripts/install-k8s-tools\.sh$)'; then
+          if echo "$changed" | grep -qE '^(deploy/helm/|deploy/k3s/|deploy/k8s/|loadgen/|\.github/workflows/k8s\.yml$|\.github/scripts/install-k8s-tools\.sh$)'; then
             echo "k8s=true" >> "$GITHUB_OUTPUT"
           else
             echo "k8s=false" >> "$GITHUB_OUTPUT"
@@ -50,6 +51,11 @@ jobs:
       KIND_CONFIG: deploy/k3s/kind-config-ci.yaml   # three nodes instead of the laptop's one
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.6"                        # the same uv as ci-python.yml, for hpa-check.sh's Locust run
+          enable-cache: true
+          cache-dependency-glob: loadgen/uv.lock
       - name: kind, kubectl and Helm (fixed versions, checked by SHA-256)
         run: |
           .github/scripts/install-k8s-tools.sh "$RUNNER_TEMP/bin"
@@ -85,6 +91,10 @@ jobs:
       # The network rules (step 4.6b): intruder pods reach nothing of ours, each service only what it needs
       - name: Only the allowed connections
         run: deploy/k3s/network-policy-check.sh
+      # The HPAs under real load (step 4.7a): at least one service scales up, the load test itself passes (only
+      # correct 429s), and every order still reaches a final state once the load stops. ~4-5 minutes.
+      - name: Autoscaling under load
+        run: deploy/k3s/hpa-check.sh
       - name: The pods run on the two workers, none on the control plane
         run: |
           kubectl get pods --namespace opspilot-apps --output wide
@@ -115,6 +125,8 @@ jobs:
           kubectl get events -A --sort-by=.lastTimestamp > k8s-logs/events.txt 2>&1 || true
           kubectl get gatewayclass,gateway,httproute -A --output yaml > k8s-logs/gateway-api.yaml 2>&1 || true
           kubectl get networkpolicy -A --output yaml > k8s-logs/network-policies.yaml 2>&1 || true
+          kubectl get hpa -A --output yaml > k8s-logs/hpa.yaml 2>&1 || true
+          kubectl top pods --namespace opspilot-apps > k8s-logs/top-pods.txt 2>&1 || true
           kubectl logs --namespace kube-system deploy/traefik --tail=1000 > k8s-logs/traefik.log 2>&1 || true
           for namespace in opspilot-apps opspilot-data; do
             for pod in $(kubectl get pods --namespace "$namespace" --output name 2>/dev/null); do
