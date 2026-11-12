@@ -23,5 +23,7 @@ kubectl wait kafkatopic --all --namespace opspilot-data --for=condition=Ready --
 # --wait: until every Deployment's pods are ready (their readiness probes pass).
 helm dependency build deploy/helm/opspilot
 helm upgrade --install --reset-values opspilot deploy/helm/opspilot --namespace opspilot-apps --wait --timeout 10m
+# The front door: Traefik has taken the Gateway ("Programmed") and the route (step 4.6a)
+kubectl wait gateway/opspilot --namespace opspilot-apps --for=condition=Programmed --timeout=3m
 
 kubectl get pods --namespace opspilot-apps

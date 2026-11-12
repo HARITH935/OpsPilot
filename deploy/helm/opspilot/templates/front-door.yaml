@@ -1,0 +1,50 @@
+{{- /* The front door (Gateway API, step 4.6a, ADR 0013). Two objects, two jobs:
+       - Gateway: WHERE to listen. Served by Traefik (gatewayClassName), on its entrypoint "web", which the node's
+         port 80 leads to (deploy/k3s/traefik-values.yaml).
+       - HTTPRoute: WHICH requests go WHERE. Only the paths the shop offers are routed, all to our api-gateway;
+         everything else (e.g. /actuator) gets Traefik's 404, so health and metrics stay inside the cluster. */}}
+{{- $door := .Values.frontDoor }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}-front-door
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  gatewayClassName: {{ $door.gatewayClassName }}
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: {{ $door.port }}
+      {{- with $door.hostname }}
+      hostname: {{ . | quote }}   # only requests for this host name
+      {{- end }}
+      allowedRoutes:
+        namespaces:
+          from: Same   # only HTTPRoutes from this namespace may use this door
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: api-gateway
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}-front-door
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  parentRefs:
+    - name: {{ .Release.Name }}   # the Gateway above
+      sectionName: http
+  rules:
+    - matches:
+        # PathPrefix matches whole path segments: "/api" takes /api and /api/orders/1, but not /apifoo
+        {{- range $door.paths }}
+        - path:
+            type: PathPrefix
+            value: {{ . }}
+        {{- end }}
+      backendRefs:
+        - name: api-gateway
+          port: {{ (index .Values "api-gateway").port }}
