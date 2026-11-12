@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Creates the local Kubernetes cluster "opspilot" (kind, one node) with OpsPilot's namespaces, metrics-server and the
-# operators for PostgreSQL (CloudNativePG) and Kafka (Strimzi). Next: deploy/k3s/secrets-from-env.sh, then the charts
-# in deploy/helm (deploy/k3s/README.md).
+# Creates the Kubernetes cluster "opspilot" (kind) with OpsPilot's namespaces, metrics-server and the operators for
+# PostgreSQL (CloudNativePG) and Kafka (Strimzi). Next: deploy/k3s/shop-up.sh (deploy/k3s/README.md).
+# Locally one node (kind-config.yaml); CI uses three: KIND_CONFIG=deploy/k3s/kind-config-ci.yaml deploy/k3s/kind-up.sh
 # Run from anywhere; needs Docker (5 GB of memory for Docker Desktop, ADR 0009), kind, kubectl and helm.
 # Delete it again with: kind delete cluster --name opspilot
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-kind create cluster --config deploy/k3s/kind-config.yaml --wait 120s   # --wait: until the node is Ready
+KIND_CONFIG=${KIND_CONFIG:-deploy/k3s/kind-config.yaml}
+kind create cluster --config "$KIND_CONFIG" --wait 180s   # --wait: until the nodes are Ready
 kubectl config use-context kind-opspilot                               # make sure kubectl talks to this cluster
 
 kubectl apply -f deploy/k8s/namespaces.yaml
