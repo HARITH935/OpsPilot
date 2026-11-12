@@ -59,6 +59,11 @@ api-gateway:
     # The gateway believes that header only when it comes from these addresses: the pod network of kind (k3s:
     # 10.42.0.0/16, Phase 5). The rate limiter then counts per real client, and nobody outside can fake an address.
     GATEWAY_TRUSTED_PROXIES: 10.244.0.0/16
+    # ...and only our code reads that header (ClientIpResolver). On Kubernetes, Spring Boot otherwise switches on
+    # Tomcat's own handling (server.forward-headers-strategy defaults to "native" there), which trusts EVERY private
+    # address as a proxy and rewrites the client address before our code sees it, so the list above was ignored and
+    # any pod could fake its address. Found by a test mutation (step 4.6a): without the list, nothing changed.
+    SERVER_FORWARDHEADERSSTRATEGY: none
     # The token signing key pair, from the Secret gateway-jwt (mounted below): every gateway pod signs with the same
     # key, so a token from one is accepted by the others (with more than one pod, step 4.7)
     JWT_PRIVATE_KEY_FILE: /etc/opspilot/jwt/private.pem
