@@ -1,0 +1,114 @@
+{{- /* Network rules for the four services (step 4.6b, ADR 0014). deploy/k8s/network-policies.yaml closes the
+       namespace (nothing in, nothing out but DNS); each policy here opens exactly what one service needs:
+         api-gateway        ← Traefik, helm test      → order / inventory / payment, Redis
+         order, payment     ← api-gateway             → PostgreSQL, Kafka
+         inventory-service  ← api-gateway             → PostgreSQL, Kafka, Redis
+         helm test          → api-gateway
+       A rule's "to" / "from" picks pods by their labels (and namespace); "ports" are the destination's ports. */}}
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+{{- $gateway := index .Values "api-gateway" }}
+{{- $backends := list "order-service" "inventory-service" "payment-service" }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: api-gateway
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:   # Traefik, in its namespace
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.frontDoor.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $np.frontDoor.podLabels | nindent 14 }}
+        - podSelector:         # this chart's helm test pod (same namespace)
+            matchLabels:
+              app.kubernetes.io/component: helm-test
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports:
+        - protocol: TCP
+          port: {{ $gateway.port }}
+  egress:
+    {{- range $backends }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ . }}
+      ports:
+        - protocol: TCP
+          port: {{ (index $.Values .).port }}
+    {{- end }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml $np.redis.podLabels | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ $np.redis.port }}
+{{- range $backends }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ . }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ . }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: api-gateway
+      ports:
+        - protocol: TCP
+          port: {{ (index $.Values .).port }}
+  egress:
+    {{- range list $np.postgres $np.kafka }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .podLabels | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .port }}
+    {{- end }}
+    {{- if eq . "inventory-service" }}
+    - to:   # its product cache
+        - podSelector:
+            matchLabels:
+              {{- toYaml $np.redis.podLabels | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ $np.redis.port }}
+    {{- end }}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-helm-test
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: helm-test
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: api-gateway
+      ports:
+        - protocol: TCP
+          port: {{ $gateway.port }}
+{{- end }}

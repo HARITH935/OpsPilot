@@ -13,6 +13,7 @@ kind create cluster --config "$KIND_CONFIG" --wait 180s   # --wait: until the no
 kubectl config use-context kind-opspilot                               # make sure kubectl talks to this cluster
 
 kubectl apply -f deploy/k8s/namespaces.yaml
+kubectl apply -f deploy/k8s/network-policies.yaml   # closed by default; the charts add the allows (step 4.6b)
 
 # Each install waits until its pods are ready, at most 10 minutes: the first time, their images are downloaded, which
 # on a slow connection takes minutes.

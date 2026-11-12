@@ -1,0 +1,48 @@
+{{- /* Who may connect to the PostgreSQL pods (step 4.6b, ADR 0014). Everything else is closed by the namespace's
+       default deny (deploy/k8s/network-policies.yaml). Which login may open which database is pg_hba's job
+       (cluster.yaml): this is the layer below, who may knock at all. */}}
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "postgres.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ .Release.Name }}   # the label CloudNativePG puts on this Cluster's pods
+  policyTypes: [Ingress]
+  ingress:
+    # The services, and this chart's helm test: PostgreSQL's port
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.clients.namespace }}
+          podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: {{ toJson $np.clients.apps }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: helm-test
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    # The operator, and the instances among each other (replication, once there is more than one)
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- toYaml $np.operatorLabels | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ .Release.Name }}
+      ports:
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 5432
+{{- end }}

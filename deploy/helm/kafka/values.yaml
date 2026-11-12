@@ -43,3 +43,10 @@ topics:
   # Control plane (Phases 8-9): anomaly alerts for the agent, the agent's progress for the dashboard
   - opspilot.incidents
   - opspilot.timeline
+
+# Network rules (step 4.6b): who may connect to port 9092. Strimzi writes its own NetworkPolicy for the broker; these
+# peers narrow it from "every pod" to the three services and this chart's helm test.
+networkPolicy:
+  clients:
+    namespace: opspilot-apps
+    apps: [order-service, inventory-service, payment-service]

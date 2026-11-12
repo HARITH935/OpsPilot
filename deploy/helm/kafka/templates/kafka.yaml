@@ -39,12 +39,27 @@ spec:
     metadataVersion: {{ .Values.metadataVersion }}
     image: {{ .Values.image }}
     listeners:
-      # Port 9092 inside the cluster, plain (no TLS, no login), like Compose. Who may connect at all is limited by
-      # NetworkPolicies (step 4.6). Strimzi adds its own TLS listener for the controller and replication traffic.
+      # Port 9092 inside the cluster, plain (no TLS, no login), like Compose. Who may connect at all: the peers below.
+      # Strimzi adds its own TLS listener for the controller and replication traffic.
       - name: plain
         port: 9092
         type: internal
         tls: false
+        # Who may connect (step 4.6b): Strimzi turns this list into the "from" of its NetworkPolicy for this port.
+        # Without it, Strimzi opens 9092 to every pod in the cluster.
+        networkPolicyPeers:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: {{ .Values.networkPolicy.clients.namespace }}
+            podSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values: {{ toJson .Values.networkPolicy.clients.apps }}
+          - podSelector:
+              matchLabels:
+                app.kubernetes.io/component: helm-test
+                app.kubernetes.io/instance: {{ .Release.Name }}
     config:
       # One broker, so Kafka's internal topics keep one copy (the defaults expect 3 brokers)
       offsets.topic.replication.factor: 1

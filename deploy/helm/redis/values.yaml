@@ -21,3 +21,10 @@ resources:
     memory: 32Mi
   limits:
     memory: 128Mi    # 64 MB of data + Redis itself + headroom, as in Compose
+
+# Network rules (templates/network-policy.yaml, step 4.6b): only these apps (their app.kubernetes.io/name, in the
+# same namespace) and this chart's helm test may connect. The data-plane Redis serves the gateway's rate limiter and
+# inventory's product cache; redis-control (Phase 12) gets its own list.
+networkPolicy:
+  enabled: true
+  allowedApps: [api-gateway, inventory-service]

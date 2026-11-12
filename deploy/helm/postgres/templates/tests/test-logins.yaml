@@ -6,6 +6,7 @@ metadata:
   name: {{ .Release.Name }}-test-logins
   labels:
     {{- include "postgres.labels" . | nindent 4 }}
+    app.kubernetes.io/component: helm-test   # the network rules let test pods reach what they test (step 4.6b)
   annotations:
     "helm.sh/hook": test
     "helm.sh/hook-delete-policy": before-hook-creation   # keep the last test pod (and its log) until the next run

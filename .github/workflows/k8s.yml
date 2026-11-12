@@ -1,6 +1,6 @@
 # The full-size Kubernetes check (step 4.5, ADR 0009): a three-node kind cluster on the runner, the whole shop
 # installed with the same scripts as on the laptop (kind-up.sh, shop-up.sh), then every chart's helm test and an
-# order from outside through the front door (front-door-check.sh). Runs on
+# order from outside through the front door (front-door-check.sh) and the network rules (network-policy-check.sh). Runs on
 # every pull request to main and every push to main that can change what it installs (deploy/helm, deploy/k3s,
 # deploy/k8s, this file, the tools script). A PR can only be merged when this passes (required check "k8s").
 # The images are the ones named in deploy/helm/opspilot/values.yaml, exactly what would be deployed; changes to the
@@ -82,6 +82,9 @@ jobs:
       # From outside the cluster, like a customer: the runner's localhost:80 → kind → Traefik → Gateway API → the shop
       - name: Orders through the front door
         run: deploy/k3s/front-door-check.sh http://localhost
+      # The network rules (step 4.6b): intruder pods reach nothing of ours, each service only what it needs
+      - name: Only the allowed connections
+        run: deploy/k3s/network-policy-check.sh
       - name: The pods run on the two workers, none on the control plane
         run: |
           kubectl get pods --namespace opspilot-apps --output wide
@@ -111,6 +114,7 @@ jobs:
           kubectl get nodes,pods -A --output wide > k8s-logs/overview.txt 2>&1 || true
           kubectl get events -A --sort-by=.lastTimestamp > k8s-logs/events.txt 2>&1 || true
           kubectl get gatewayclass,gateway,httproute -A --output yaml > k8s-logs/gateway-api.yaml 2>&1 || true
+          kubectl get networkpolicy -A --output yaml > k8s-logs/network-policies.yaml 2>&1 || true
           kubectl logs --namespace kube-system deploy/traefik --tail=1000 > k8s-logs/traefik.log 2>&1 || true
           for namespace in opspilot-apps opspilot-data; do
             for pod in $(kubectl get pods --namespace "$namespace" --output name 2>/dev/null); do
