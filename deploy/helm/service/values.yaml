@@ -24,7 +24,7 @@ startupSeconds: 300
 
 resources:
   requests:
-    cpu: 100m         # the HPA (step 4.6) compares the CPU use with this
+    cpu: 100m         # the HPA (step 4.7) compares the CPU use with this
     memory: 320Mi     # what a service uses after start (240-330 MB measured in Compose)
   limits:
     memory: 512Mi     # like Compose; the JVM takes up to half as heap (MaxRAMPercentage=50 in the Dockerfile)

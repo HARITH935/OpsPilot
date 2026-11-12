@@ -1,0 +1,121 @@
+# The full-size Kubernetes check (step 4.5, ADR 0009): a three-node kind cluster on the runner, the whole shop
+# installed with the same scripts as on the laptop (kind-up.sh, shop-up.sh), then every chart's helm test. Runs on
+# every pull request to main and every push to main that can change what it installs (deploy/helm, deploy/k3s,
+# deploy/k8s, this file, the tools script). A PR can only be merged when this passes (required check "k8s").
+# The images are the ones named in deploy/helm/opspilot/values.yaml, exactly what would be deployed; changes to the
+# services' code are tested by the e2e workflow (Compose).
+name: k8s
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      k8s: ${{ steps.diff.outputs.k8s }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2   # the new commit and its first parent, enough to compare them
+      - id: diff
+        run: |
+          changed=$(git diff --name-only HEAD^1 HEAD)
+          echo "Changed files:"; echo "$changed"
+          if echo "$changed" | grep -qE '^(deploy/helm/|deploy/k3s/|deploy/k8s/|\.github/workflows/k8s\.yml$|\.github/scripts/install-k8s-tools\.sh$)'; then
+            echo "k8s=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "k8s=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  k8s:
+    needs: changes
+    # Skipped (= passed) when nothing it installs changed; if the check broke, it runs anyway
+    if: ${{ !cancelled() && needs.changes.outputs.k8s != 'false' }}
+    runs-on: ubuntu-24.04   # 4 CPUs, 16 GB: three kind nodes + the whole shop
+    timeout-minutes: 45
+    env:
+      KIND_CONFIG: deploy/k3s/kind-config-ci.yaml   # three nodes instead of the laptop's one
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: kind, kubectl and Helm (fixed versions, checked by SHA-256)
+        run: |
+          .github/scripts/install-k8s-tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"   # first in PATH for the next steps, before the runner's own
+      # secrets-from-env.sh reads the passwords from deploy/docker/.env. This one exists only on this runner, for this
+      # run: every change-me from the template becomes a random value, masked so it never appears in the log.
+      - name: A .env for this run only
+        run: |
+          cp deploy/docker/.env.example deploy/docker/.env
+          for key in $(grep -E '^[A-Z_]+=change-me$' deploy/docker/.env | cut -d= -f1); do
+            value=$(openssl rand -hex 16)
+            echo "::add-mask::$value"
+            sed -i "s/^$key=change-me\$/$key=$value/" deploy/docker/.env
+          done
+          if grep -q 'change-me' deploy/docker/.env; then echo "::error::a change-me is left in .env"; exit 1; fi
+      - name: The cluster (3 nodes) and the operators
+        run: deploy/k3s/kind-up.sh
+      - name: The whole shop
+        run: deploy/k3s/shop-up.sh
+      - name: Every chart's helm test
+        run: |
+          failed=()
+          for release in postgres:opspilot-data kafka:opspilot-data redis:opspilot-apps opspilot:opspilot-apps; do
+            name=${release%%:*} namespace=${release##*:}
+            echo "::group::helm test $name"
+            helm test "$name" --namespace "$namespace" --timeout 6m --logs || failed+=("$name")
+            echo "::endgroup::"
+          done
+          if (( ${#failed[@]} )); then echo "::error::helm test failed: ${failed[*]}"; exit 1; fi
+      - name: The pods run on the two workers, none on the control plane
+        run: |
+          kubectl get pods --namespace opspilot-apps --output wide
+          kubectl get pods --namespace opspilot-data --output wide
+          ours() { kubectl get pods -A --field-selector "spec.nodeName=$1" --no-headers | grep -cE '^opspilot-(apps|data) ' || true; }
+          for node in $(kubectl get nodes --output name); do
+            node=${node#node/}
+            count=$(ours "$node")
+            echo "$node: $count OpsPilot pods"
+            case "$node" in
+              *control-plane) (( count == 0 )) || { echo "::error::OpsPilot pods on the control plane"; exit 1; } ;;
+              *) (( count > 0 )) || { echo "::error::no OpsPilot pod on worker $node"; exit 1; } ;;
+            esac
+          done
+      - name: No pod breaks Pod Security "restricted"
+        run: |
+          # A server-side dry run of the label lists every running pod that would break the level, as a warning
+          for namespace in opspilot-apps opspilot-data; do
+            out=$(kubectl label --dry-run=server --overwrite namespace "$namespace" pod-security.kubernetes.io/enforce=restricted 2>&1)
+            echo "$out"
+            if grep -qi warning <<<"$out"; then echo "::error::$namespace has pods that break restricted"; exit 1; fi
+          done
+      # Only when something failed: what ran where, the events, and every pod's description and log, kept 7 days
+      - if: failure()
+        run: |
+          mkdir -p k8s-logs
+          kubectl get nodes,pods -A --output wide > k8s-logs/overview.txt 2>&1 || true
+          kubectl get events -A --sort-by=.lastTimestamp > k8s-logs/events.txt 2>&1 || true
+          for namespace in opspilot-apps opspilot-data; do
+            for pod in $(kubectl get pods --namespace "$namespace" --output name 2>/dev/null); do
+              file="k8s-logs/$namespace-${pod#pod/}"
+              kubectl describe --namespace "$namespace" "$pod" > "$file.describe.txt" 2>&1 || true
+              kubectl logs --namespace "$namespace" "$pod" --all-containers --tail=1000 > "$file.log" 2>&1 || true
+            done
+          done
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: k8s-logs
+          path: k8s-logs/
+          retention-days: 7

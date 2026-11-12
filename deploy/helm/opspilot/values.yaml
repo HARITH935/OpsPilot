@@ -56,7 +56,7 @@ api-gateway:
     REDIS_HOST: redis                                   # rate-limit counters
     DEMO_USERS_ENABLED: "true"                          # viewer / engineer / admin: local cluster and evals only
     # The token signing key pair, from the Secret gateway-jwt (mounted below): every gateway pod signs with the same
-    # key, so a token from one is accepted by the others (with more than one pod, step 4.6)
+    # key, so a token from one is accepted by the others (with more than one pod, step 4.7)
     JWT_PRIVATE_KEY_FILE: /etc/opspilot/jwt/private.pem
     JWT_PUBLIC_KEY_FILE: /etc/opspilot/jwt/public.pem
   secretEnv:

@@ -13,7 +13,7 @@ overhead. GitHub's standard runners have 16 GB.
 ## Decision
 1. **Locally: kind with one node** (control plane and worker in one), `deploy/k3s/kind-config.yaml`, created by
    `deploy/k3s/kind-up.sh`. Docker Desktop gets **5 GB** (4.8 GB usable). Replicas and HPA maximums stay small.
-2. **The full version in CI:** a workflow (step 4.6) creates a **three-node** kind cluster on GitHub's 16 GB runner,
+2. **The full version in CI:** a workflow (step 4.5 since 2026-11-12) creates a **three-node** kind cluster on GitHub's 16 GB runner,
    installs everything with Helm and runs orders through the Ingress. That is where "3 nodes" is proven.
 3. **Kubernetes 1.36.4** (`kindest/node`, pinned by digest): one minor version behind the newest kind offers (1.37), so
    the operators of 4.2 / 4.3 support it. `kubectl` 1.37 from Homebrew (Docker Desktop's bundled 1.34 would be three
@@ -23,7 +23,7 @@ overhead. GitHub's standard runners have 16 GB.
    **baseline** and warns about **restricted** until the operators' pods are checked (4.2 / 4.3).
 5. **metrics-server** from its Helm chart (3.14.0) with `--kubelet-insecure-tls`, local only (kind's kubelet has a
    self-signed certificate; the cluster listens only on 127.0.0.1). k3s brings its own metrics-server in the cloud.
-6. The node's ports 80 / 443 are mapped to 127.0.0.1 from the start, for the Ingress in 4.5 (kind can't add them later).
+6. The node's ports 80 / 443 are mapped to 127.0.0.1 from the start, for the Ingress in 4.6 (kind can't add them later).
 
 ## Alternatives considered
 | Option | Why not chosen |
@@ -45,7 +45,7 @@ overhead. GitHub's standard runners have 16 GB.
   uses 1.23 GiB of Docker's 4.8 GB. Other projects' containers on the same Docker took another 0.57 GB. On the macOS
   side, Docker's VM holds its full 5 GB, and the browser and editor take most of the rest. At rest the Mac swapped
   187 MB in and 226 MB out within 30 s. Still to come: Kafka (4.3), the four services at ~0.3 GB each (4.4), Ingress
-  (4.5).
+  (4.6 since the renumbering).
 - **Decision (2026-11-10): continue locally** (option A). The extra workloads stay inside Docker's VM, which macOS
   already counts in full. Rule: a step moves to the CI cluster if a pod is killed for lack of memory, or Docker uses
   more than ~4.3 GB. After Kafka (4.3): ~2.5 GB.
@@ -55,6 +55,15 @@ overhead. GitHub's standard runners have 16 GB.
   - the operators kept losing leader election
   - Docker's VM clock fell minutes behind and jumped, which cancelled orders via the saga timeout
   Next decision (open): move the heavy checks to the CI cluster now, or lighten the laptop and stay.
+- **Decision (2026-11-12): the heavy checks move to the CI cluster now** (option B). Point 2 above comes forward from
+  the last step to step 4.5:
+  - `.github/workflows/k8s.yml` builds the three-node cluster (`kind-config-ci.yaml`) on GitHub's runner, installs
+    the whole shop with the same scripts as the laptop (`KIND_CONFIG=… kind-up.sh`, `shop-up.sh`), and runs every
+    chart's `helm test`
+  - it uses the images named in `values.yaml` (what would be deployed), not ones rebuilt from the PR; code changes are
+    tested on Compose by `e2e`
+  - Ingress + NetworkPolicies (4.6) and the HPA / killed-pod checks (4.7) are proven there
+  - the laptop's cluster stays for looking around and small experiments, stopped (`docker stop`) when not in use
 - While the cluster runs, the Compose stack stays off (`docker compose … --profile apps down`), and the Mac runs as few
   other apps as possible.
 - The three-node, full-size proof depends on step 4.6's CI workflow.

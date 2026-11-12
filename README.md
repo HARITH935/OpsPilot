@@ -7,6 +7,7 @@
 
 [![ci-java](https://github.com/HARITH935/OpsPilot/actions/workflows/ci-java.yml/badge.svg?branch=main)](https://github.com/HARITH935/OpsPilot/actions/workflows/ci-java.yml)
 [![ci-python](https://github.com/HARITH935/OpsPilot/actions/workflows/ci-python.yml/badge.svg?branch=main)](https://github.com/HARITH935/OpsPilot/actions/workflows/ci-python.yml)
+[![k8s](https://github.com/HARITH935/OpsPilot/actions/workflows/k8s.yml/badge.svg?branch=main)](https://github.com/HARITH935/OpsPilot/actions/workflows/k8s.yml)
 
 ---
 
@@ -173,12 +174,13 @@ GitHub Actions runs these on every PR to `main` and every push to `main`; a PR c
 | `python-e2e` ([ci-python.yml](.github/workflows/ci-python.yml)) | `ruff check`, `ruff format --check` in `e2e/` | `e2e/` changed |
 | `images` ([images.yml](.github/workflows/images.yml)) | the four images for amd64 + arm64, scanned by Trivy (HIGH / CRITICAL fail) | `services/` changed |
 | `e2e` ([e2e.yml](.github/workflows/e2e.yml)) | the whole shop in Docker Compose on the runner, then the 6 [end-to-end tests](e2e/README.md) | `services/`, `e2e/` or `deploy/docker/` changed |
+| `k8s` ([k8s.yml](.github/workflows/k8s.yml)) | a **three-node** kind cluster on the runner, the whole shop installed with [`kind-up.sh` + `shop-up.sh`](deploy/k3s/README.md), every chart's `helm test`, pods only on the workers, Pod Security "restricted" clean | `deploy/helm/`, `deploy/k3s/` or `deploy/k8s/` changed |
 
 On `main`, the job `publish` builds and scans the same way and then pushes the images to GHCR (public):
 `ghcr.io/harith935/opspilot-<service>:sha-<short commit>` ([details](services/README.md#container-images)).
 
 A check whose folder didn't change is *skipped*, which counts as passed, so a docs-only PR isn't held up. On pushes to
-`main`, `ci-java` and `ci-python` always run everything; `images` / `publish` and `e2e` run when their folders changed.
+`main`, `ci-java` and `ci-python` always run everything; `images` / `publish`, `e2e` and `k8s` run when their folders changed.
 The workflows may only read the repo (only `publish` may write packages), and every action is pinned to a full commit.
 
 ## Progress

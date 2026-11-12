@@ -1,12 +1,15 @@
 # deploy/k3s
 
-Kubernetes clusters for OpsPilot. Today: the **local kind cluster** (Phase 4, [ADR 0009](../../docs/adr/0009-lean-local-kubernetes.md)).
+Kubernetes clusters for OpsPilot (Phase 4, [ADR 0009](../../docs/adr/0009-lean-local-kubernetes.md)):
+- the **local kind cluster**, one node, for looking around
+- the **full cluster in CI**, three nodes, where every change to the charts is proven (see below)
+
 The Oracle Cloud VM with k3s follows in Phase 5.
 
 ## The local cluster (kind, one node)
 **kind** ("Kubernetes in Docker") runs each Kubernetes node as a Docker container. Ours has **one node**, which is the
 control plane and the worker at the same time: three don't fit on an 8 GB Mac. The full three-node version runs in CI
-(step 4.6).
+(step 4.5, below).
 
 **You need:** Docker Desktop with **5 GB** of memory (Settings → Resources → Advanced → Memory limit), `kind`,
 `kubectl` (1.35–1.37, e.g. `brew install kubernetes-cli`), `helm` and `deploy/docker/.env` (copied from
@@ -17,7 +20,7 @@ control plane and the worker at the same time: three don't fit on an 8 GB Mac. T
 deploy/k3s/kind-up.sh                          # create: ~3.5 min (two operators), ends with the node "Ready"
 deploy/k3s/shop-up.sh                          # the whole shop: Secrets, postgres, kafka, redis, the 4 services
 helm test opspilot -n opspilot-apps            # an order through the gateway → CONFIRMED (7 checks)
-kubectl port-forward -n opspilot-apps svc/api-gateway 8080:8080   # the shop on localhost:8080 (Ingress: step 4.5)
+kubectl port-forward -n opspilot-apps svc/api-gateway 8080:8080   # the shop on localhost:8080 (Ingress: step 4.6)
 kubectl get pods -A                            # everything that runs
 kubectl top node                               # CPU + memory (metrics-server)
 docker stop opspilot-control-plane             # pause: frees the memory, keeps the cluster and its downloaded images
@@ -40,7 +43,7 @@ helm test postgres -n opspilot-data            # 11 checks; also: helm test redi
 
 | File | What it is |
 |---|---|
-| [`kind-config.yaml`](kind-config.yaml) | the cluster: one node, Kubernetes 1.36.4 (pinned by digest), ports 80 / 443 on 127.0.0.1 for the Ingress (step 4.5) |
+| [`kind-config.yaml`](kind-config.yaml) | the cluster: one node, Kubernetes 1.36.4 (pinned by digest), ports 80 / 443 on 127.0.0.1 for the Ingress (step 4.6) |
 | [`kind-up.sh`](kind-up.sh) | creates the cluster, applies the namespaces, installs metrics-server and the operators: CloudNativePG (PostgreSQL), Strimzi (Kafka) |
 | [`metrics-server-values.yaml`](metrics-server-values.yaml) | metrics-server's settings (chart 3.14.0): small resources, `--kubelet-insecure-tls` (local only) |
 | [`cnpg-values.yaml`](cnpg-values.yaml) | the CloudNativePG operator's settings (chart 0.29.1 = operator 1.30.1): image pinned by digest, watches only `opspilot-data` |
@@ -87,3 +90,22 @@ Measured (2026-11-09, M2, Docker 4.8 GB):
 
 The fresh runs passed every check; after a stop / start on the stressed laptop, orders were cancelled by such clock
 jumps. Restarting Docker Desktop resets the clock (it also stops every other container).
+
+## The full cluster in CI (three nodes)
+The laptop can't run the whole shop reliably (step 4.4: heavy swapping, timeouts, Docker's clock jumping), so the
+real proof runs on GitHub's 16 GB runner: [`.github/workflows/k8s.yml`](../../.github/workflows/k8s.yml), required
+check `k8s`, on every pull request that changes `deploy/helm/`, `deploy/k3s/` or `deploy/k8s/`.
+
+1. kind 0.33.0, kubectl 1.36.6 and Helm 4.3.1, from [`install-k8s-tools.sh`](../../.github/scripts/install-k8s-tools.sh)
+   (fixed versions, each checked by SHA-256)
+2. a `.env` with random, masked passwords (exists only on that runner, for that run)
+3. `KIND_CONFIG=deploy/k3s/kind-config-ci.yaml deploy/k3s/kind-up.sh`: [three nodes](kind-config-ci.yaml), one control
+   plane + two workers
+4. `deploy/k3s/shop-up.sh`, then every chart's `helm test` (postgres, kafka, redis, opspilot)
+5. our pods must run on the workers only (the control plane keeps kind's "no ordinary pods" taint), and Pod Security
+   "restricted" must be clean
+6. on failure: every pod's description and log, the events, and what ran where, as the artifact `k8s-logs` (7 days)
+
+The images are the ones named in `deploy/helm/opspilot/values.yaml`, exactly what would be deployed. A change to the
+services' code is tested by `e2e` (Compose), and reaches Kubernetes once CI has published its images and the tag is
+bumped.

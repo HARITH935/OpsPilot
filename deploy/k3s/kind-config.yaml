@@ -1,6 +1,6 @@
 # The local Kubernetes cluster (kind = "Kubernetes in Docker": each node is a Docker container).
 # ONE node that is both control plane and worker, not three: three don't fit next to everything else on an 8 GB Mac
-# (ADR 0009). The full three-node version runs in CI instead (step 4.6).
+# (ADR 0009). The full three-node version runs in CI instead: kind-config-ci.yaml (step 4.5).
 # Create:  deploy/k3s/kind-up.sh        Delete:  kind delete cluster --name opspilot
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -10,8 +10,8 @@ nodes:
     # Kubernetes 1.36.4, pinned by digest: one version behind the newest, so the operators of 4.2 / 4.3 support it
     image: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
     labels:
-      ingress-ready: "true"   # Ingress-NGINX (step 4.5) is placed on the node that has the ports below
-    # Ports 80 / 443 of the node container on 127.0.0.1 of the Mac, for the Ingress in step 4.5.
+      ingress-ready: "true"   # Ingress-NGINX (step 4.6) is placed on the node that has the ports below
+    # Ports 80 / 443 of the node container on 127.0.0.1 of the Mac, for the Ingress in step 4.6.
     # kind can only add them when the cluster is created, so they are here from the start.
     extraPortMappings:
       - containerPort: 80

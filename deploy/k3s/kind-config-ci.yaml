@@ -1,0 +1,26 @@
+# The full-size cluster, for CI (.github/workflows/k8s.yml) on GitHub's 16 GB runner: THREE nodes, one control plane
+# and two workers (ADR 0009). Locally there is only one (kind-config.yaml): three don't fit on the 8 GB Mac.
+# Create:  KIND_CONFIG=deploy/k3s/kind-config-ci.yaml deploy/k3s/kind-up.sh
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: opspilot
+nodes:
+  # Runs Kubernetes itself. With workers next to it, kind marks it "no ordinary pods" (a taint), so our pods
+  # run on the two workers, as on a real cluster.
+  - role: control-plane
+    image: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed   # = local
+    labels:
+      ingress-ready: "true"   # Ingress-NGINX (step 4.6) goes on the node that has the ports below
+    extraPortMappings:        # ports 80 / 443 of this node on the runner's localhost, for the Ingress (step 4.6)
+      - containerPort: 80
+        hostPort: 80
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 443
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+  - role: worker
+    image: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
+  - role: worker
+    image: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
