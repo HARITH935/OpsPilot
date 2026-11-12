@@ -74,9 +74,11 @@ done
 sleep 35
 
 # psql <database> <sql>: through the primary's local socket, the admin way (no network password - cluster.yaml).
+# "-c postgres": the pod also has an init container (bootstrap-controller), so kubectl exec without -c prints a
+# "Defaulted container ..." note on stderr every time - naming it avoids that note instead of merely hiding it.
 # "|| echo ERROR": a failed exec (pod not found, connection refused) becomes a value the checks below report as a
-# clean FAIL instead of aborting the script before anything after it runs.
-psql() { kubectl exec --namespace opspilot-data postgres-1 -- psql -d "$1" -tAc "$2" 2>&1 || echo ERROR; }
+# clean FAIL instead of aborting the script before anything after it runs; its real stderr still reaches the log.
+psql() { kubectl exec --namespace opspilot-data postgres-1 -c postgres -- psql -d "$1" -tAc "$2" || echo ERROR; }
 
 pending=$(psql orders "select count(*) from orders where status = 'PENDING'")
 [ "$pending" = 0 ] && ok "orders: 0 left PENDING" || bad "orders: $pending (expected 0 PENDING; the saga never finished them, or the query itself failed)"
