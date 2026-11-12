@@ -55,6 +55,15 @@ api-gateway:
     PAYMENT_SERVICE_URL: http://payment-service:8082
     REDIS_HOST: redis                                   # rate-limit counters
     DEMO_USERS_ENABLED: "true"                          # viewer / engineer / admin: local cluster and evals only
+    # Requests come in through Traefik (the front door below), which adds the client's address to X-Forwarded-For.
+    # The gateway believes that header only when it comes from these addresses: the pod network of kind (k3s:
+    # 10.42.0.0/16, Phase 5). The rate limiter then counts per real client, and nobody outside can fake an address.
+    GATEWAY_TRUSTED_PROXIES: 10.244.0.0/16
+    # ...and only our code reads that header (ClientIpResolver). On Kubernetes, Spring Boot otherwise switches on
+    # Tomcat's own handling (server.forward-headers-strategy defaults to "native" there), which trusts EVERY private
+    # address as a proxy and rewrites the client address before our code sees it, so the list above was ignored and
+    # any pod could fake its address. Found by a test mutation (step 4.6a): without the list, nothing changed.
+    SERVER_FORWARDHEADERSSTRATEGY: none
     # The token signing key pair, from the Secret gateway-jwt (mounted below): every gateway pod signs with the same
     # key, so a token from one is accepted by the others (with more than one pod, step 4.7)
     JWT_PRIVATE_KEY_FILE: /etc/opspilot/jwt/private.pem
@@ -70,3 +79,13 @@ api-gateway:
       memory: 256Mi
     limits:
       memory: 384Mi   # the lightest of the four (no database), as in Compose
+
+# The front door (Gateway API, served by Traefik in kube-system; templates/front-door.yaml, step 4.6a)
+frontDoor:
+  gatewayClassName: traefik   # created by Traefik's chart (deploy/k3s/traefik-values.yaml)
+  port: 8000                  # Traefik's entrypoint "web"; the node's port 80 leads there
+  hostname: ""                # "" = any host name; the public domain in Phase 5
+  paths:                      # what the outside may reach, all through api-gateway
+    - /api
+    - /auth
+    - /.well-known

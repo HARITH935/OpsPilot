@@ -20,7 +20,8 @@ control plane and the worker at the same time: three don't fit on an 8 GB Mac. T
 deploy/k3s/kind-up.sh                          # create: ~3.5 min (two operators), ends with the node "Ready"
 deploy/k3s/shop-up.sh                          # the whole shop: Secrets, postgres, kafka, redis, the 4 services
 helm test opspilot -n opspilot-apps            # an order through the gateway → CONFIRMED (7 checks)
-kubectl port-forward -n opspilot-apps svc/api-gateway 8080:8080   # the shop on localhost:8080 (Ingress: step 4.6)
+curl http://localhost/api/products             # the shop through the front door (Traefik + Gateway API, step 4.6a)
+deploy/k3s/front-door-check.sh                 # from outside: routed paths, 404s, an order to CONFIRMED, real client IP
 kubectl get pods -A                            # everything that runs
 kubectl top node                               # CPU + memory (metrics-server)
 docker stop opspilot-control-plane             # pause: frees the memory, keeps the cluster and its downloaded images
@@ -44,10 +45,12 @@ helm test postgres -n opspilot-data            # 11 checks; also: helm test redi
 | File | What it is |
 |---|---|
 | [`kind-config.yaml`](kind-config.yaml) | the cluster: one node, Kubernetes 1.36.4 (pinned by digest), ports 80 / 443 on 127.0.0.1 for the Ingress (step 4.6) |
-| [`kind-up.sh`](kind-up.sh) | creates the cluster, applies the namespaces, installs metrics-server and the operators: CloudNativePG (PostgreSQL), Strimzi (Kafka) |
+| [`kind-up.sh`](kind-up.sh) | creates the cluster, applies the namespaces, installs metrics-server, the operators (CloudNativePG for PostgreSQL, Strimzi for Kafka) and the front door (the Gateway API's object types, checked by SHA-256, and Traefik) |
 | [`metrics-server-values.yaml`](metrics-server-values.yaml) | metrics-server's settings (chart 3.14.0): small resources, `--kubelet-insecure-tls` (local only) |
 | [`cnpg-values.yaml`](cnpg-values.yaml) | the CloudNativePG operator's settings (chart 0.29.1 = operator 1.30.1): image pinned by digest, watches only `opspilot-data` |
 | [`strimzi-values.yaml`](strimzi-values.yaml) | the Strimzi operator's settings (chart 1.3.0): images pinned by digest, every Kafka pod set up for "restricted" |
+| [`traefik-values.yaml`](traefik-values.yaml) | the front door's settings (Traefik chart 42.1.3 = v3.7.16, image pinned by digest): only the Gateway API, the node's port 80, in `kube-system` ([ADR 0013](../../docs/adr/0013-traefik-and-gateway-api.md)) |
+| [`front-door-check.sh`](front-door-check.sh) | checks the shop from outside, through `http://localhost`: routed paths reach the gateway, everything else is 404, an order ends CONFIRMED, the gateway counts the client's real address |
 | [`secrets-from-env.sh`](secrets-from-env.sh) | creates the Secrets from `deploy/docker/.env`: the three database logins (in `opspilot-data` and `opspilot-apps`), `redis`, `gateway-demo-users`; and the gateway's key pair `gateway-jwt` (made once with `openssl`, then kept); refuses missing or `change-me` values; safe to run again |
 | [`shop-up.sh`](shop-up.sh) | the whole shop in order: Secrets, postgres, kafka, redis, then the four services (umbrella chart), waiting for each; always the charts' values (`--reset-values`); safe to run again (8 s when all runs) |
 | [`../k8s/namespaces.yaml`](../k8s/namespaces.yaml) | `opspilot-apps` and `opspilot-data`, with Pod Security rules |
@@ -101,7 +104,8 @@ check `k8s`, on every pull request that changes `deploy/helm/`, `deploy/k3s/` or
 2. a `.env` with random, masked passwords (exists only on that runner, for that run)
 3. `KIND_CONFIG=deploy/k3s/kind-config-ci.yaml deploy/k3s/kind-up.sh`: [three nodes](kind-config-ci.yaml), one control
    plane + two workers
-4. `deploy/k3s/shop-up.sh`, then every chart's `helm test` (postgres, kafka, redis, opspilot)
+4. `deploy/k3s/shop-up.sh`, then every chart's `helm test` (postgres, kafka, redis, opspilot), then
+   `front-door-check.sh http://localhost` from the runner itself, the way a customer comes in
 5. our pods must run on the workers only (the control plane keeps kind's "no ordinary pods" taint), and Pod Security
    "restricted" must be clean
 6. on failure: every pod's description and log, the events, and what ran where, as the artifact `k8s-logs` (7 days)

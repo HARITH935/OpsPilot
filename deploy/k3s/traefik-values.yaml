@@ -1,0 +1,72 @@
+# Settings for Traefik (Helm chart traefik 42.1.3 = Traefik v3.7.16), installed by kind-up.sh into kube-system: the
+# cluster's front door (ADR 0013). It implements the Gateway API: our umbrella chart describes a Gateway (where to
+# listen) and an HTTPRoute (which paths go to which Service), Traefik does the routing. k3s, the cloud cluster of
+# Phase 5, ships the same Traefik in kube-system.
+
+image:
+  digest: sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65   # v3.7.16 (amd64 + arm64, ...)
+versionOverride: v3.7.16   # the chart can't read the version from a digest
+
+ingressClass:
+  enabled: false      # that's for the old Ingress API, which we don't use
+
+providers:
+  kubernetesGateway:
+    enabled: true     # read Gateway API objects (Gateway, HTTPRoute) from every namespace
+  kubernetesIngress:
+    enabled: false    # not the old Ingress objects
+  kubernetesCRD:
+    enabled: false    # not Traefik's own objects (IngressRoute, ...): only the standard Gateway API
+
+gatewayClass:
+  enabled: true       # the GatewayClass "traefik": a Gateway with gatewayClassName "traefik" is served by this Traefik
+gateway:
+  enabled: false      # no default Gateway here: ours is in the umbrella chart (deploy/helm/opspilot)
+
+ports:
+  web:
+    # Traefik listens on 8000 inside its pod (no root needed). hostPort 80: the node's port 80 leads there, and kind
+    # maps that node port to 127.0.0.1:80 (kind-config.yaml). A hostPort is refused by Pod Security "baseline" and
+    # "restricted": one more reason Traefik lives in kube-system, which has no such rule (like on k3s).
+    hostPort: 80
+  websecure:
+    expose:
+      default: false  # no HTTPS yet: certificates come with cert-manager in Phase 5
+  traefik:
+    expose:
+      default: false  # Traefik's own dashboard and API stay inside the pod
+ingressRoute:
+  dashboard:
+    enabled: false
+api:
+  dashboard: false
+
+service:
+  type: ClusterIP     # kind has no cloud load balancer; traffic comes in through the hostPort
+
+# Run on the node whose ports kind maps (label ingress-ready, kind-config*.yaml). In CI that's the control plane,
+# which keeps ordinary pods away (a taint): Traefik is allowed there.
+nodeSelector:
+  ingress-ready: "true"
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+
+# Only one pod can hold port 80 of a node: on an update the old pod stops first, then the new one starts
+# (the chart's default, a new pod first, would wait forever for the port)
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 0
+    maxUnavailable: 1
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 192Mi
+
+accessLog:
+  enabled: true       # one line per request in the pod's log: who asked for what, and the answer

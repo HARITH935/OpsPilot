@@ -105,7 +105,7 @@ deploy/k3s/shop-up.sh                                   # everything: Secrets, d
 helm dependency build deploy/helm/opspilot              # packs ../service into opspilot/charts/ (not in Git)
 helm upgrade --install opspilot deploy/helm/opspilot -n opspilot-apps --wait --timeout 10m
 helm test opspilot -n opspilot-apps && kubectl logs opspilot-test-order -n opspilot-apps
-kubectl port-forward -n opspilot-apps svc/api-gateway 8080:8080   # the shop on localhost:8080 (until the Ingress, 4.6)
+curl http://localhost/api/products                      # through the front door (Traefik + Gateway API, step 4.6a)
 ```
 
 | File | What it is |
@@ -115,6 +115,7 @@ kubectl port-forward -n opspilot-apps svc/api-gateway 8080:8080   # the shop on 
 | [`service/templates/configmap.yaml`](service/templates/configmap.yaml), [`service.yaml`](service/templates/service.yaml), [`pdb.yaml`](service/templates/pdb.yaml) | the plain settings; the fixed address `<name>:<port>`; at most one pod down during maintenance |
 | [`opspilot/Chart.yaml`](opspilot/Chart.yaml) | the four dependencies (aliases of `service`), `Chart.lock` pins them |
 | [`opspilot/values.yaml`](opspilot/values.yaml) | the four services' settings: the same as in Compose, with Kubernetes addresses (`postgres-rw.opspilot-data.svc`, `kafka-kafka-bootstrap.opspilot-data.svc:9092`, `redis`, `order-service:8081`, ...) |
+| [`opspilot/templates/front-door.yaml`](opspilot/templates/front-door.yaml) | the front door ([ADR 0013](../../docs/adr/0013-traefik-and-gateway-api.md)): a `Gateway` (served by Traefik, port 80 of the node) and an `HTTPRoute` that sends `/api`, `/auth`, `/.well-known` to `api-gateway`; everything else gets 404 |
 | [`opspilot/templates/tests/test-order.yaml`](opspilot/templates/tests/test-order.yaml) | the `helm test` pod: gateway ready, demo login + JWKS, an order of one SKU-6 → CONFIRMED, its payment COMPLETED, the stock one lower |
 
 Passwords appear only as references to Secrets (`secretEnv`, `secretFiles`): `orders-db` / `inventory-db` /
