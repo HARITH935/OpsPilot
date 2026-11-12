@@ -81,6 +81,5 @@ frontDoor:
   port: 8000                  # Traefik's entrypoint "web"; the node's port 80 leads there
   hostname: ""                # "" = any host name; the public domain in Phase 5
   paths:                      # what the outside may reach, all through api-gateway
-    - /api
     - /auth
     - /.well-known
