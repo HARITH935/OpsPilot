@@ -22,6 +22,7 @@ deploy/k3s/shop-up.sh                          # the whole shop: Secrets, postgr
 helm test opspilot -n opspilot-apps            # an order through the gateway → CONFIRMED (7 checks)
 curl http://localhost/api/products             # the shop through the front door (Traefik + Gateway API, step 4.6a)
 deploy/k3s/front-door-check.sh                 # from outside: routed paths, 404s, an order to CONFIRMED, real client IP
+deploy/k3s/hpa-check.sh                        # the HPAs under real Locust load (step 4.7a): ~4-6 min, needs loadgen's uv
 kubectl get pods -A                            # everything that runs
 kubectl top node                               # CPU + memory (metrics-server)
 docker stop opspilot-control-plane             # pause: frees the memory, keeps the cluster and its downloaded images
@@ -51,6 +52,7 @@ helm test postgres -n opspilot-data            # 11 checks; also: helm test redi
 | [`strimzi-values.yaml`](strimzi-values.yaml) | the Strimzi operator's settings (chart 1.3.0): images pinned by digest, every Kafka pod set up for "restricted" |
 | [`traefik-values.yaml`](traefik-values.yaml) | the front door's settings (Traefik chart 42.1.3 = v3.7.16, image pinned by digest): only the Gateway API, the node's port 80, in `kube-system` ([ADR 0013](../../docs/adr/0013-traefik-and-gateway-api.md)) |
 | [`front-door-check.sh`](front-door-check.sh) | checks the shop from outside, through `http://localhost`: routed paths reach the gateway, everything else is 404, an order ends CONFIRMED, the gateway counts the client's real address |
+| [`hpa-check.sh`](hpa-check.sh) | checks the HPAs under real load (step 4.7a): runs Locust through the front door while watching every HPA, then checks at least one scaled past 1 replica, Locust itself PASSED (only correct 429s), every Deployment settled back to all pods Ready, and the saga still finished every order |
 | [`secrets-from-env.sh`](secrets-from-env.sh) | creates the Secrets from `deploy/docker/.env`: the three database logins (in `opspilot-data` and `opspilot-apps`), `redis`, `gateway-demo-users`; and the gateway's key pair `gateway-jwt` (made once with `openssl`, then kept); refuses missing or `change-me` values; safe to run again |
 | [`shop-up.sh`](shop-up.sh) | the whole shop in order: Secrets, postgres, kafka, redis, then the four services (umbrella chart), waiting for each; always the charts' values (`--reset-values`); safe to run again (8 s when all runs) |
 | [`../k8s/namespaces.yaml`](../k8s/namespaces.yaml) | `opspilot-apps` and `opspilot-data`, with Pod Security rules |
