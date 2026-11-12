@@ -1,0 +1,14 @@
+{{- /* PodDisruptionBudget: during planned maintenance (e.g. draining a node), Kubernetes takes down at most one pod
+       of this service at a time. With one replica that still lets maintenance happen (a short outage); with more
+       (the HPA, step 4.6) the others keep serving. "minAvailable: 1" with one replica would block maintenance forever. */}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Chart.Name }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "service.selectorLabels" . | nindent 6 }}

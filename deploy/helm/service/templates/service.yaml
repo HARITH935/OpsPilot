@@ -1,0 +1,15 @@
+{{- /* A fixed address in front of the service's pods: <name>.<namespace>.svc:<port>, e.g. order-service:8081 for
+       the gateway. It spreads requests over the ready pods. */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Chart.Name }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "service.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.port }}
+      targetPort: http

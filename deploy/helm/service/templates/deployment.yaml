@@ -1,0 +1,98 @@
+{{- /* A Deployment: interchangeable copies (replicas) of the service with random pod names. On a change it starts a
+       new pod, waits until it is ready, and only then stops an old one (rolling update): no downtime. */}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Chart.Name }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      {{- include "service.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "service.labels" . | nindent 8 }}
+      annotations:
+        # A fingerprint of the settings: when they change, the pod template changes too, so Kubernetes rolls out
+        # new pods (environment variables are only read when a container starts)
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false   # the services never talk to the Kubernetes API
+      # No automatic variables for every Service in the namespace (REDIS_PORT=tcp://10.96.x.x:6379, ...): they clash
+      # with our own settings (REDIS_PORT must be a number) and the services find each other by DNS name anyway.
+      # Measured: without this, inventory-service and the gateway crashed at start with "For input string: tcp://...".
+      enableServiceLinks: false
+      securityContext:                      # passes the "restricted" Pod Security level
+        runAsNonRoot: true
+        runAsUser: 10001                    # the user our images run as (services/Dockerfile)
+        runAsGroup: 10001
+        fsGroup: 10001                      # mounted Secret files belong to this group, so the service can read them
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: {{ .Chart.Name }}
+          image: {{ include "service.image" . }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.port }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Chart.Name }}
+          {{- with .Values.secretEnv }}
+          env:
+            {{- range $name, $ref := . }}
+            - name: {{ $name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ref.secret }}
+                  key: {{ $ref.key }}
+            {{- end }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true    # only /tmp below is writable (Tomcat and Java write temporary files there)
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- range .Values.secretFiles }}
+            - name: {{ .secret }}
+              mountPath: {{ .mountPath }}
+              readOnly: true
+            {{- end }}
+          # Spring Boot's health endpoints (management.endpoint.health.probes.enabled in each service)
+          startupProbe:      # while starting: every 5 s, for at most startupSeconds (values.yaml)
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 5
+            failureThreshold: {{ div .Values.startupSeconds 5 }}
+          readinessProbe:    # not ready → the Service sends it no requests
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:     # stuck for a minute → Kubernetes restarts the container
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        {{- range .Values.secretFiles }}
+        - name: {{ .secret }}
+          secret:
+            secretName: {{ .secret }}
+            defaultMode: 0440   # readable by the owner (root) and the group 10001 (fsGroup above), nobody else
+        {{- end }}

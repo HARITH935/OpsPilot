@@ -12,18 +12,21 @@ kubectl config use-context kind-opspilot                               # make su
 
 kubectl apply -f deploy/k8s/namespaces.yaml
 
+# Each install waits until its pods are ready, at most 10 minutes: the first time, their images are downloaded, which
+# on a slow connection takes minutes.
+
 # metrics-server from its own chart repository, at a fixed chart version
 helm upgrade --install metrics-server metrics-server \
   --repo https://kubernetes-sigs.github.io/metrics-server/ --version 3.14.0 \
-  --namespace kube-system --values deploy/k3s/metrics-server-values.yaml --wait --timeout 3m
+  --namespace kube-system --values deploy/k3s/metrics-server-values.yaml --wait --timeout 10m
 
 # The CloudNativePG operator (runs PostgreSQL for us, step 4.2a), also at a fixed chart version
 helm upgrade --install cnpg cloudnative-pg \
   --repo https://cloudnative-pg.github.io/charts --version 0.29.1 \
-  --namespace opspilot-data --values deploy/k3s/cnpg-values.yaml --wait --timeout 3m
+  --namespace opspilot-data --values deploy/k3s/cnpg-values.yaml --wait --timeout 10m
 
 # The Strimzi operator (runs Kafka for us, step 4.3); its chart is published as an OCI image on quay.io
 helm upgrade --install strimzi oci://quay.io/strimzi-helm/strimzi-kafka-operator --version 1.3.0 \
-  --namespace opspilot-data --values deploy/k3s/strimzi-values.yaml --wait --timeout 3m
+  --namespace opspilot-data --values deploy/k3s/strimzi-values.yaml --wait --timeout 10m
 
 kubectl get nodes -o wide

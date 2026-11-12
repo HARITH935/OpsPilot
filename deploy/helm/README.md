@@ -1,6 +1,7 @@
 # deploy/helm
 
-OpsPilot's Helm charts: one per component, plus an umbrella chart `opspilot` later (step 4.4). A **Helm chart** is a
+OpsPilot's Helm charts: one per data component, and one generic chart that the umbrella chart `opspilot` uses for each
+of the four services. A **Helm chart** is a
 folder of Kubernetes YAML templates plus default settings (`values.yaml`); `helm upgrade --install` fills in the
 templates and applies them as one **release**, which can be upgraded, tested and removed as a whole.
 
@@ -9,6 +10,8 @@ templates and applies them as one **release**, which can be upgraded, tested and
 | [`postgres`](postgres/) | PostgreSQL 16 with a database + login per service, run by the CloudNativePG operator ([ADR 0010](../../docs/adr/0010-postgres-on-kubernetes.md)) | 4.2a |
 | [`redis`](redis/) | one Redis 7 (memory only, password from a Secret) as a StatefulSet; installed as `redis` now, as `redis-control` in Phase 12 | 4.2b |
 | [`kafka`](kafka/) | Kafka 4.2.2 (one KRaft node) and the 8 topics, run by the Strimzi operator ([ADR 0011](../../docs/adr/0011-kafka-on-kubernetes.md)) | 4.3 |
+| [`service`](service/) | one Spring Boot service: Deployment, Service, ConfigMap, PodDisruptionBudget; a building block, not installed alone | 4.4 |
+| [`opspilot`](opspilot/) | the umbrella: the four services, each a copy of `service` ([ADR 0012](../../docs/adr/0012-one-generic-service-chart.md)) | 4.4 |
 
 ## postgres
 Needs the CloudNativePG operator and the logins' Secrets in the namespace: on the local cluster both come from
@@ -89,3 +92,31 @@ Clients connect to `kafka-kafka-bootstrap.opspilot-data.svc:9092`. Worth knowing
 - **Partitions can only grow.** Lowering `partitions` makes the `KafkaTopic` report `Decreasing partitions not supported`;
   the only way back is deleting and recreating the topic.
 - **A config change restarts the broker.** Strimzi does it by itself (measured: 26 s), one pod at a time.
+
+## opspilot (the four services)
+The umbrella chart lists the generic chart [`service`](service/) four times as a **dependency**, each under its own
+**alias** (`order-service`, `inventory-service`, `payment-service`, `api-gateway`). The alias becomes the service's name.
+Each service's settings sit under its alias in [`opspilot/values.yaml`](opspilot/values.yaml), next to `global.image`
+(the registry and the one image tag for all four).
+
+```bash
+deploy/k3s/shop-up.sh                                   # everything: Secrets, data layer, then the services (waits for each)
+# or only the services, once the data layer runs:
+helm dependency build deploy/helm/opspilot              # packs ../service into opspilot/charts/ (not in Git)
+helm upgrade --install opspilot deploy/helm/opspilot -n opspilot-apps --wait --timeout 10m
+helm test opspilot -n opspilot-apps && kubectl logs opspilot-test-order -n opspilot-apps
+kubectl port-forward -n opspilot-apps svc/api-gateway 8080:8080   # the shop on localhost:8080 (until the Ingress, 4.5)
+```
+
+| File | What it is |
+|---|---|
+| [`service/values.yaml`](service/values.yaml) | what one service can set: image, port, replicas, `env` (plain settings), `secretEnv` (from Secrets), `secretFiles` (mounted Secrets), resources |
+| [`service/templates/deployment.yaml`](service/templates/deployment.yaml) | the pods: user 10001, read-only file system + `/tmp`, no Kubernetes API token, startup / readiness / liveness on Spring Boot's health endpoints, a config fingerprint that rolls the pods when settings change |
+| [`service/templates/configmap.yaml`](service/templates/configmap.yaml), [`service.yaml`](service/templates/service.yaml), [`pdb.yaml`](service/templates/pdb.yaml) | the plain settings; the fixed address `<name>:<port>`; at most one pod down during maintenance |
+| [`opspilot/Chart.yaml`](opspilot/Chart.yaml) | the four dependencies (aliases of `service`), `Chart.lock` pins them |
+| [`opspilot/values.yaml`](opspilot/values.yaml) | the four services' settings: the same as in Compose, with Kubernetes addresses (`postgres-rw.opspilot-data.svc`, `kafka-kafka-bootstrap.opspilot-data.svc:9092`, `redis`, `order-service:8081`, ...) |
+| [`opspilot/templates/tests/test-order.yaml`](opspilot/templates/tests/test-order.yaml) | the `helm test` pod: gateway ready, demo login + JWKS, an order of one SKU-6 → CONFIRMED, its payment COMPLETED, the stock one lower |
+
+Passwords appear only as references to Secrets (`secretEnv`, `secretFiles`): `orders-db` / `inventory-db` /
+`payments-db`, `redis`, `gateway-demo-users`, and the gateway's key pair `gateway-jwt`, all from
+[`deploy/k3s/secrets-from-env.sh`](../k3s/secrets-from-env.sh).

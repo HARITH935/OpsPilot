@@ -1,0 +1,30 @@
+# Settings of one service. The umbrella chart (deploy/helm/opspilot) fills these in per service; the defaults here
+# are what all four share. The service's name is the chart's name in the umbrella (its alias, e.g. "order-service").
+
+image:
+  name: ""            # e.g. opspilot-order-service; required
+  # The registry and the tag usually come from the umbrella's "global" (one tag for all four, bumped by CI later)
+  registry: ""
+  tag: ""
+
+replicas: 1
+port: 8081            # the port the service listens on (its SERVER_PORT); the Kubernetes Service uses the same
+
+# Plain settings → a ConfigMap, handed to the container as environment variables
+env: {}
+# Settings from Secrets → environment variables. NAME: {secret: <Secret name>, key: <key in it>}
+secretEnv: {}
+# Secrets mounted as files (e.g. the gateway's JWT keys). - {secret: <name>, mountPath: <folder>}
+secretFiles: []
+
+# How long a starting service may take before Kubernetes gives up and restarts it. Measured on the 8 GB laptop with the
+# whole shop starting at once: 58-99 s on a second try, over 180 s on the first (all JVMs, Kafka and PostgreSQL
+# competing for CPU). Only for the start: afterwards the liveness probe takes over and stays strict.
+startupSeconds: 300
+
+resources:
+  requests:
+    cpu: 100m         # the HPA (step 4.6) compares the CPU use with this
+    memory: 320Mi     # what a service uses after start (240-330 MB measured in Compose)
+  limits:
+    memory: 512Mi     # like Compose; the JVM takes up to half as heap (MaxRAMPercentage=50 in the Dockerfile)

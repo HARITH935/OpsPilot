@@ -1,0 +1,72 @@
+# The shop's settings on the local kind cluster. The same names and values as in Docker Compose, except the addresses:
+# Kubernetes Services instead of Compose container names. Passwords only as references to Secrets (created by
+# deploy/k3s/secrets-from-env.sh locally, Sealed Secrets in the cloud).
+
+global:
+  image:
+    registry: ghcr.io/harith935
+    # The images CI published from main (images.yml): the same tag for all four. Phase 5's CI bumps it.
+    tag: sha-218a8ef
+
+order-service:
+  image:
+    name: opspilot-order-service
+  port: 8081
+  env:
+    DB_URL: jdbc:postgresql://postgres-rw.opspilot-data.svc:5432/orders   # CloudNativePG's Service of the primary
+    KAFKA_BOOTSTRAP_SERVERS: kafka-kafka-bootstrap.opspilot-data.svc:9092  # Strimzi's Service of the broker
+  secretEnv:
+    DB_USERNAME: {secret: orders-db, key: username}
+    DB_PASSWORD: {secret: orders-db, key: password}
+
+inventory-service:
+  image:
+    name: opspilot-inventory-service
+  port: 8083
+  env:
+    DB_URL: jdbc:postgresql://postgres-rw.opspilot-data.svc:5432/inventory
+    KAFKA_BOOTSTRAP_SERVERS: kafka-kafka-bootstrap.opspilot-data.svc:9092
+    REDIS_HOST: redis   # its product cache: the redis release in this namespace (deploy/helm/redis)
+  secretEnv:
+    DB_USERNAME: {secret: inventory-db, key: username}
+    DB_PASSWORD: {secret: inventory-db, key: password}
+    REDIS_PASSWORD: {secret: redis, key: password}
+
+payment-service:
+  image:
+    name: opspilot-payment-service
+  port: 8082
+  env:
+    DB_URL: jdbc:postgresql://postgres-rw.opspilot-data.svc:5432/payments
+    KAFKA_BOOTSTRAP_SERVERS: kafka-kafka-bootstrap.opspilot-data.svc:9092
+    PAYMENT_FAILURE_RATE: "0.0"   # the simulated provider: share of payments that fail (chaos C12 raises it)
+    PAYMENT_LATENCY_MS: "100"     # and how long each takes
+  secretEnv:
+    DB_USERNAME: {secret: payments-db, key: username}
+    DB_PASSWORD: {secret: payments-db, key: password}
+
+api-gateway:
+  image:
+    name: opspilot-api-gateway
+  port: 8080
+  env:
+    ORDER_SERVICE_URL: http://order-service:8081        # the Services of the other three, in this namespace
+    INVENTORY_SERVICE_URL: http://inventory-service:8083
+    PAYMENT_SERVICE_URL: http://payment-service:8082
+    REDIS_HOST: redis                                   # rate-limit counters
+    DEMO_USERS_ENABLED: "true"                          # viewer / engineer / admin: local cluster and evals only
+    # The token signing key pair, from the Secret gateway-jwt (mounted below): every gateway pod signs with the same
+    # key, so a token from one is accepted by the others (with more than one pod, step 4.6)
+    JWT_PRIVATE_KEY_FILE: /etc/opspilot/jwt/private.pem
+    JWT_PUBLIC_KEY_FILE: /etc/opspilot/jwt/public.pem
+  secretEnv:
+    REDIS_PASSWORD: {secret: redis, key: password}
+    DEMO_USERS_PASSWORD: {secret: gateway-demo-users, key: password}
+  secretFiles:
+    - secret: gateway-jwt
+      mountPath: /etc/opspilot/jwt
+  resources:
+    requests:
+      memory: 256Mi
+    limits:
+      memory: 384Mi   # the lightest of the four (no database), as in Compose
