@@ -7,7 +7,11 @@ metadata:
   labels:
     {{- include "service.labels" . | nindent 4 }}
 spec:
+  {{- /* When the HPA (templates/hpa.yaml) owns replica count, leave this unset: Kubernetes keeps whatever the
+         HPA last chose, instead of a "helm upgrade" resetting it back to Values.replicas every time. */}}
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicas }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "service.selectorLabels" . | nindent 6 }}

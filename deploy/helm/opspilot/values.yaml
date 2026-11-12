@@ -8,6 +8,9 @@ global:
     # The images CI published from main (images.yml): the same tag for all four. Phase 5's CI bumps it.
     tag: sha-218a8ef
 
+# order-service, inventory-service and payment-service autoscale (step 4.7, Part A §8); api-gateway stays at its
+# fixed replicas below. maxReplicas 3 everywhere: each Kafka topic has 3 partitions (step 2.1), so a 4th consumer
+# in the same group would never get any (deploy/helm/service/values.yaml has the shared defaults).
 order-service:
   image:
     name: opspilot-order-service
@@ -18,6 +21,8 @@ order-service:
   secretEnv:
     DB_USERNAME: {secret: orders-db, key: username}
     DB_PASSWORD: {secret: orders-db, key: password}
+  autoscaling:
+    enabled: true
 
 inventory-service:
   image:
@@ -31,6 +36,8 @@ inventory-service:
     DB_USERNAME: {secret: inventory-db, key: username}
     DB_PASSWORD: {secret: inventory-db, key: password}
     REDIS_PASSWORD: {secret: redis, key: password}
+  autoscaling:
+    enabled: true
 
 payment-service:
   image:
@@ -44,6 +51,8 @@ payment-service:
   secretEnv:
     DB_USERNAME: {secret: payments-db, key: username}
     DB_PASSWORD: {secret: payments-db, key: password}
+  autoscaling:
+    enabled: true
 
 api-gateway:
   image:

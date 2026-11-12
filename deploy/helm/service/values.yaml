@@ -10,6 +10,16 @@ image:
 replicas: 1
 port: 8081            # the port the service listens on (its SERVER_PORT); the Kubernetes Service uses the same
 
+# HorizontalPodAutoscaler (step 4.7): scales replicas between min and max to keep average CPU use near the target,
+# measured against resources.requests.cpu below. Off by default (replicas above is used instead); the umbrella
+# chart turns it on for order/inventory/payment. Kafka's topics have 3 partitions each, so a 4th consumer in a
+# group would sit idle: maxReplicas stays at 3 everywhere this is on.
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+
 # Plain settings → a ConfigMap, handed to the container as environment variables
 env: {}
 # Settings from Secrets → environment variables. NAME: {secret: <Secret name>, key: <key in it>}

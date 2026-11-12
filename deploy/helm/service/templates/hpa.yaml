@@ -1,0 +1,26 @@
+{{- /* HorizontalPodAutoscaler (step 4.7): every 15 s (the cluster's default) it compares this Deployment's average
+       CPU use against resources.requests.cpu (deployment.yaml), as a percentage of that request, and adds or
+       removes replicas to bring it back near the target - within minReplicas..maxReplicas. Needs metrics-server
+       (kind-up.sh locally; k3s brings its own), which is what "kubectl top pods" reads too. */}}
+{{- if .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ .Chart.Name }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .Chart.Name }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
