@@ -34,6 +34,11 @@ Phase 5, ships **Traefik v3** in `kube-system` as its built-in front door, and T
    (`GATEWAY_TRUSTED_PROXIES=10.244.0.0/16` on kind; 10.42.0.0/16 on k3s). So the rate limiter counts each real
    client, and an address in a made-up header is ignored. With the NetworkPolicies (4.6b), only Traefik will be
    able to reach the gateway.
+   - **Only our code reads that header:** `SERVER_FORWARDHEADERSSTRATEGY=none` in the gateway's settings. On
+     Kubernetes, Spring Boot otherwise defaults `server.forward-headers-strategy` to `native`: Tomcat's RemoteIpValve
+     then trusts **every private address** as a proxy and rewrites the client address before `ClientIpResolver`
+     sees it. `GATEWAY_TRUSTED_PROXIES` was silently ignored, so any pod could fake its address. (Compose is not
+     affected: there Spring Boot detects no cloud platform.)
 5. **Proof from outside:** `deploy/k3s/front-door-check.sh` runs in the `k8s` workflow on the runner's localhost. It
    checks the routed paths, the 404s, an order to CONFIRMED, and which address the gateway counted.
 
@@ -46,6 +51,12 @@ Phase 5, ships **Traefik v3** in `kube-system` as its built-in front door, and T
 | Traefik's own `IngressRoute` objects | Traefik-only; the Gateway API objects work with any implementation. |
 
 ## Consequences
+- **Found by the tests (step 4.6a):**
+  - The first address check wrongly failed on the `helm test` pod's own, direct login; it now compares with
+    Traefik's pod address.
+  - A mutation without `GATEWAY_TRUSTED_PROXIES` changed nothing, which revealed Spring Boot's Kubernetes default
+    above (`native`). After `SERVER_FORWARDHEADERSSTRATEGY=none` the same mutation is caught.
+  - A mutation without the `/api` route was caught at once (404 for products and orders).
 - The tech stack (CLAUDE.md §5) reads "Traefik (Gateway API)" instead of "Ingress-NGINX"; B1's "Ingress-NGINX + TLS"
   becomes "Traefik (Gateway API) + TLS". Phase 5's HTTPS: cert-manager with the Gateway (a `certificateRefs` on an
   HTTPS listener).
