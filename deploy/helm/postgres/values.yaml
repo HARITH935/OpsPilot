@@ -31,3 +31,12 @@ databases:
   - name: payments
     owner: payments_user
     secret: payments-db
+
+# Network rules (templates/network-policy.yaml, step 4.6b): who may connect to the PostgreSQL pods
+networkPolicy:
+  enabled: true
+  clients:                    # the services that log in (port 5432): their namespace and app.kubernetes.io/name
+    namespace: opspilot-apps
+    apps: [order-service, inventory-service, payment-service]
+  # CloudNativePG's operator (same namespace) must reach every instance on 8000 (its status API) and 5432
+  operatorLabels: {app.kubernetes.io/name: cloudnative-pg}

@@ -89,3 +89,22 @@ frontDoor:
     - /api
     - /auth
     - /.well-known
+
+# Network rules (templates/network-policies.yaml, step 4.6b, ADR 0014): who may connect to each service, and to
+# what each service may connect. Together with deploy/k8s/network-policies.yaml (everything else closed).
+networkPolicy:
+  enabled: true
+  frontDoor:                  # Traefik, the only way in from outside
+    namespace: kube-system
+    podLabels: {app.kubernetes.io/name: traefik}
+  redis:                      # the redis release in this namespace (deploy/helm/redis)
+    podLabels: {app.kubernetes.io/name: redis, app.kubernetes.io/instance: redis}
+    port: 6379
+  postgres:                   # CloudNativePG's PostgreSQL pods
+    namespace: opspilot-data
+    podLabels: {cnpg.io/cluster: postgres}
+    port: 5432
+  kafka:                      # Strimzi's broker pods
+    namespace: opspilot-data
+    podLabels: {strimzi.io/cluster: kafka, strimzi.io/name: kafka-kafka}
+    port: 9092

@@ -1,0 +1,68 @@
+# The namespaces' basic network rules (step 4.6b, ADR 0014), applied by deploy/k3s/kind-up.sh right after the
+# namespaces. A NetworkPolicy is a firewall rule for pods. Once a policy selects a pod, the pod may only send / receive
+# what some policy allows. These start from "closed"; the allows for the shop live next to what they protect, in the
+# charts (deploy/helm/*/templates/network-policy*.yaml).
+# Check: deploy/k3s/network-policy-check.sh (also in CI).
+
+# ── opspilot-apps: nothing in, nothing out, unless allowed ──────────────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: opspilot-apps
+spec:
+  podSelector: {}           # every pod in the namespace
+  policyTypes: [Ingress, Egress]   # no "ingress:" / "egress:" lists = nothing allowed
+---
+# Every pod may ask the cluster's DNS (CoreDNS in kube-system) for names like order-service or postgres-rw...
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: opspilot-apps
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# ── opspilot-data: nothing in, unless allowed; going out stays open ────────────────────────────────────────────────
+# Out stays open: the operators and PostgreSQL's pod talk to the Kubernetes API, whose address differs per cluster.
+# The risk that matters here is who gets IN to the data.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: opspilot-data
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# The Kubernetes API server calls CloudNativePG's webhook (port 9443) on every change to a Cluster or Database, to
+# check and complete it. The API server runs on the control plane's own network, not as a pod, hence: from anywhere,
+# but only this port of this pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cnpg-webhook
+  namespace: opspilot-data
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cloudnative-pg
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 9443
