@@ -17,3 +17,4 @@ Each records the context, the decision, the alternatives considered and the cons
 | [0010](0010-postgres-on-kubernetes.md) | PostgreSQL on Kubernetes: CloudNativePG in opspilot-data, local Secrets from .env, Sealed Secrets in Phase 5 | 2026-11-09 |
 | [0011](0011-kafka-on-kubernetes.md) | Kafka on Kubernetes: Strimzi in opspilot-data, one KRaft node, topics as KafkaTopic objects | 2026-11-10 |
 | [0012](0012-one-generic-service-chart.md) | The four services from one generic Helm chart, bundled by the umbrella chart opspilot | 2026-11-11 |
+| [0013](0013-traefik-and-gateway-api.md) | The front door: Traefik and the Gateway API instead of Ingress-NGINX | 2026-11-12 |

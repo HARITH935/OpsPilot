@@ -3,7 +3,7 @@
 > Live checklist. Update after every step.
 > Legend: `[x]` done · `[ ]` todo · `[~]` in progress
 
-**Current phase:** 4 — Kubernetes Platform, 4.5 done (since 2026-11-12 the heavy checks run on a three-node cluster in CI) (Phase 0 complete 2026-10-30 · Phase 1 complete 2026-11-01 · Phase 2 complete 2026-11-04 · Phase 3 complete 2026-11-09)
+**Current phase:** 4 — Kubernetes Platform, 4.6a in progress (since 2026-11-12 the heavy checks run on a three-node cluster in CI) (Phase 0 complete 2026-10-30 · Phase 1 complete 2026-11-01 · Phase 2 complete 2026-11-04 · Phase 3 complete 2026-11-09)
 
 ---
 
@@ -78,9 +78,10 @@
 - [x] 4.3 Kafka 4.2.2 via Strimzi 1.3.0 (operator in `opspilot-data`, restricted), chart `deploy/helm/kafka`: one KRaft node, the 8 topics as `KafkaTopic` objects, `helm test` — [ADR 0011](adr/0011-kafka-on-kubernetes.md)
 - [x] 4.4 One generic chart `deploy/helm/service` (Deployment, Service, ConfigMap, probes, resources, PDB) used 4× by the umbrella `deploy/helm/opspilot`; images from GHCR; `deploy/k3s/shop-up.sh`; `helm test` = an order through the gateway — [ADR 0012](adr/0012-one-generic-service-chart.md)
 - [x] 4.5 The full cluster in CI: `.github/workflows/k8s.yml` (three kind nodes, `kind-up.sh` + `shop-up.sh`, every `helm test`), required check `k8s`
-- [ ] 4.6 Ingress-NGINX to the gateway (+ dashboard placeholder); NetworkPolicies (default deny + allows); proven in CI
+- [ ] 4.6a The front door: Traefik + Gateway API instead of the retired Ingress-NGINX ([ADR 0013](adr/0013-traefik-and-gateway-api.md)), real client IPs, an order from outside in CI
+- [ ] 4.6b NetworkPolicies (default deny + allows), proven in CI
 - [ ] 4.7 HPA under load (Locust), killed pods recover, in CI; Phase 4 wrap-up
-- **Acceptance:** [x] `helm install` brings up full system (`shop-up.sh`, 4.4) · [ ] orders work through Ingress · [ ] HPA scales under load · [ ] killed pods recover
+- **Acceptance:** [x] `helm install` brings up full system (`shop-up.sh`, 4.4) · [ ] orders work through the front door (Gateway API; was "Ingress") · [ ] HPA scales under load · [ ] killed pods recover
 - **Known gaps:** (1) CloudNativePG's PDB `postgres-primary` allows 0 disruptions: it would block draining the one node of the cloud cluster (Phase 5) · (2) Kafka has no login or TLS for clients (as in Compose): NetworkPolicies are the guard (4.6); Strimzi's own NetworkPolicies open 9092 to every pod · (3) Strimzi 1.3.1 (dependency updates) once it is two weeks old · (4) the laptop with the whole shop: heavy swapping, gateway timeouts, operators losing leader election, Docker's VM clock minutes behind with jumps (orders cancelled by the saga timeout); fresh runs pass, a stopped + started cluster did not
 
 ## Phase 5 — Go Live

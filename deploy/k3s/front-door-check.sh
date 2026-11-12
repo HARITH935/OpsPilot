@@ -53,14 +53,20 @@ fi
 code=$(status -H 'Content-Type: application/json' -H 'X-Forwarded-For: 203.0.113.7' \
   -d '{"username":"nobody","password":"not-a-password"}' "$BASE/auth/token")
 [ "$code" = 401 ] && ok "login with wrong credentials: 401" || bad "login attempt: $code, expected 401"
+#    Other recent login attempts can show up too (e.g. helm test's, made inside the cluster without Traefik), so the
+#    check looks for the two wrong answers: the made-up address, and Traefik's own pod address.
 keys=$(kubectl exec -n opspilot-apps redis-0 -- redis-cli --scan --pattern 'ratelimit:login:ip:*' 2>/dev/null || true)
 addresses=$(sed 's/^ratelimit:login:ip://' <<<"$keys" | grep -v '^$' | sort -u | xargs)
-echo "      the gateway counted login attempts from: ${addresses:-nobody}"
-case " $addresses " in
-  *" 203.0.113.7 "*) bad "the gateway believed the made-up address 203.0.113.7" ;;
-  *" 10.244."*)      bad "the gateway counted Traefik's pod address, not the client's" ;;
-  "  ")              bad "no login attempt counted" ;;
-  *)                 ok "the gateway counts the client's real address" ;;
-esac
+traefik=$(kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik -o jsonpath='{.items[*].status.podIP}')
+echo "      the gateway counted login attempts from: ${addresses:-nobody} (Traefik's pod: ${traefik:-?})"
+if [ -z "$addresses" ] || [ -z "$traefik" ]; then
+  bad "no login attempt counted, or Traefik's pod not found"
+elif [[ " $addresses " == *" 203.0.113.7 "* ]]; then
+  bad "the gateway believed the made-up address 203.0.113.7"
+elif [[ " $addresses " == *" $traefik "* ]]; then
+  bad "the gateway counted Traefik's address ($traefik), not the client's"
+else
+  ok "the gateway counts the client's real address, not Traefik's or a made-up one"
+fi
 
 exit $failed
