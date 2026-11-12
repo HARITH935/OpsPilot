@@ -58,7 +58,6 @@ api-gateway:
     # Requests come in through Traefik (the front door below), which adds the client's address to X-Forwarded-For.
     # The gateway believes that header only when it comes from these addresses: the pod network of kind (k3s:
     # 10.42.0.0/16, Phase 5). The rate limiter then counts per real client, and nobody outside can fake an address.
-    GATEWAY_TRUSTED_PROXIES: 10.244.0.0/16
     # ...and only our code reads that header (ClientIpResolver). On Kubernetes, Spring Boot otherwise switches on
     # Tomcat's own handling (server.forward-headers-strategy defaults to "native" there), which trusts EVERY private
     # address as a proxy and rewrites the client address before our code sees it, so the list above was ignored and
