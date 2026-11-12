@@ -105,7 +105,7 @@ deploy/k3s/shop-up.sh                                   # everything: Secrets, d
 helm dependency build deploy/helm/opspilot              # packs ../service into opspilot/charts/ (not in Git)
 helm upgrade --install opspilot deploy/helm/opspilot -n opspilot-apps --wait --timeout 10m
 helm test opspilot -n opspilot-apps && kubectl logs opspilot-test-order -n opspilot-apps
-kubectl port-forward -n opspilot-apps svc/api-gateway 8080:8080   # the shop on localhost:8080 (until the Ingress, 4.5)
+kubectl port-forward -n opspilot-apps svc/api-gateway 8080:8080   # the shop on localhost:8080 (until the Ingress, 4.6)
 ```
 
 | File | What it is |

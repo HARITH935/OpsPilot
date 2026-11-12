@@ -1,5 +1,5 @@
 # metrics-server for the local kind cluster (Helm chart 3.14.0). It measures CPU and memory of every pod and node:
-# `kubectl top` shows them, and the HorizontalPodAutoscaler (step 4.6) decides with them. k3s (cloud) brings its own.
+# `kubectl top` shows them, and the HorizontalPodAutoscaler (step 4.7) decides with them. k3s (cloud) brings its own.
 args:
   # kind's kubelet uses a self-signed certificate that metrics-server can't verify. Acceptable on a local cluster
   # that only listens on 127.0.0.1; never on a real one.

@@ -40,7 +40,7 @@ spec:
     image: {{ .Values.image }}
     listeners:
       # Port 9092 inside the cluster, plain (no TLS, no login), like Compose. Who may connect at all is limited by
-      # NetworkPolicies (step 4.5). Strimzi adds its own TLS listener for the controller and replication traffic.
+      # NetworkPolicies (step 4.6). Strimzi adds its own TLS listener for the controller and replication traffic.
       - name: plain
         port: 9092
         type: internal
