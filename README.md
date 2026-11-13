@@ -45,8 +45,8 @@ Prometheus · Grafana · PyTorch · LangGraph · FastAPI · React · TypeScript
 | `docs/` | Progress, ADRs, runbooks |
 
 ## Run locally
-Today (Phases 1–3 done): the three services and the API gateway, with PostgreSQL, Kafka and
-Redis. The services talk through Kafka (the order saga): an order is reserved and priced by inventory, charged by
+Today (Phases 1–4 done): the three services and the API gateway, with PostgreSQL, Kafka and
+Redis, in Docker Compose or on Kubernetes. The services talk through Kafka (the order saga): an order is reserved and priced by inventory, charged by
 payment, then confirmed (stock committed), or cancelled (out of stock, or payment failed and the stock released).
 
 ### The quick way: everything in Docker
@@ -131,7 +131,7 @@ cd e2e && uv sync && uv run pytest
 JDK or Maven on your machine: `cd services && docker build --build-arg SERVICE=order-service -t opspilot/order-service:dev .`
 Non-root, layered (a code change replaces ~100 kB), for amd64 and arm64. Details: [services/README.md](services/README.md#container-images).
 
-**Kubernetes (Phase 4, in progress):**
+**Kubernetes (Phase 4):**
 - `deploy/k3s/kind-up.sh` creates a local one-node kind cluster in about 3.5 minutes. It comes with OpsPilot's
   namespaces (strict Pod Security), metrics-server and the operators for PostgreSQL (CloudNativePG) and Kafka (Strimzi).
 - `deploy/k3s/secrets-from-env.sh` and two Helm charts add the data layer, each checked by `helm test`:
@@ -144,10 +144,16 @@ Non-root, layered (a code change replaces ~100 kB), for amd64 and arm64. Details
 - The front door is **Traefik with the Gateway API** ([ADR 0013](docs/adr/0013-traefik-and-gateway-api.md); Ingress-NGINX
   was retired in March 2026): `curl http://localhost/api/products` reaches the shop; only `/api`, `/auth` and
   `/.well-known` are routed.
-- Needs Docker Desktop with 5 GB; stop the Compose stack first.
+- **Closed by default** ([ADR 0014](docs/adr/0014-network-policies.md)): NetworkPolicies let each pod reach only
+  what it needs (e.g. payment-service reaches Kafka and its database, not Redis or the other services).
+- **Scales and heals itself:** order, inventory and payment each scale between 1 and 3 pods on CPU (an HPA; 3
+  because each Kafka topic has 3 partitions), and killed pods, services or the data layer, are replaced on their own.
+- Needs Docker Desktop with 5 GB; stop the Compose stack first. The laptop runs a one-node cluster; the full
+  three-node cluster, with the load test and the kill test, runs in CI (`k8s`).
 - Details: [deploy/k3s](deploy/k3s/README.md), [ADR 0009](docs/adr/0009-lean-local-kubernetes.md),
   [ADR 0010](docs/adr/0010-postgres-on-kubernetes.md), [ADR 0011](docs/adr/0011-kafka-on-kubernetes.md),
-  [ADR 0012](docs/adr/0012-one-generic-service-chart.md), [ADR 0013](docs/adr/0013-traefik-and-gateway-api.md).
+  [ADR 0012](docs/adr/0012-one-generic-service-chart.md), [ADR 0013](docs/adr/0013-traefik-and-gateway-api.md),
+  [ADR 0014](docs/adr/0014-network-policies.md).
 
 ## What Phase 2 can do
 | | Shown by | Result (real runs, 2026-11-04) |
@@ -168,6 +174,17 @@ Non-root, layered (a code change replaces ~100 kB), for amd64 and arm64. Details
 | The end-to-end tests on a clean machine | `e2e` in CI | 6 of 6 on GitHub's runner in 3.4 min (images built 73 s, tests 127 s) |
 | Images ready for Kubernetes | GHCR (public) | `ghcr.io/harith935/opspilot-<service>:sha-<commit>`; pulled on an arm64 Mac without login, started, `UP` |
 
+## What Phase 4 can do
+All in CI, on a three-node kind cluster built from nothing on every run (`k8s`, about 15 min):
+| | Shown by | Result (real runs, 2026-11-12 … 13) |
+|---|---|---|
+| The whole shop on Kubernetes with one command | [`shop-up.sh`](deploy/k3s/README.md) + every chart's `helm test` | 40 checks green; an order through the gateway `CONFIRMED` after ~3 s |
+| Customers come in through one front door only | [`front-door-check.sh`](deploy/k3s/front-door-check.sh) (Traefik + Gateway API) | `/api` reaches the shop, `/actuator/*` and anything else 404; the gateway counts the client's real address, not a faked one |
+| Nothing talks to anything it doesn't need | [`network-policy-check.sh`](deploy/k3s/network-policy-check.sh) | an intruder pod reaches none of the 5 shop ports; payment-service can't reach Redis or order-service |
+| More pods under load | [`hpa-check.sh`](deploy/k3s/hpa-check.sh) (60 Locust shoppers, 4 min) | order, inventory and payment each reached 3 pods (their ceiling) and held it; 13,845 requests, only correct 429s; afterwards 0 orders left PENDING or TIMEOUT-cancelled |
+| Killed pods come back | [`pod-kill-check.sh`](deploy/k3s/pod-kill-check.sh) | all 8 service pods killed at once: new ones Ready in 46–48 s, orders `CONFIRMED` again after 54 s; PostgreSQL + Kafka + Redis killed at once: back in 196 / 26 / 5 s, orders again after 199 s |
+| The checks can fail | throwaway PRs, closed unmerged | every payment failing (#46), no `/api` route (#49), no trusted-proxy list (#50), a service that never comes back (#56): each turned `k8s` red |
+
 ## Checks on every pull request (CI)
 GitHub Actions runs these on every PR to `main` and every push to `main`; a PR can only be merged when they pass:
 | Check | Runs | When |
@@ -177,7 +194,7 @@ GitHub Actions runs these on every PR to `main` and every push to `main`; a PR c
 | `python-e2e` ([ci-python.yml](.github/workflows/ci-python.yml)) | `ruff check`, `ruff format --check` in `e2e/` | `e2e/` changed |
 | `images` ([images.yml](.github/workflows/images.yml)) | the four images for amd64 + arm64, scanned by Trivy (HIGH / CRITICAL fail) | `services/` changed |
 | `e2e` ([e2e.yml](.github/workflows/e2e.yml)) | the whole shop in Docker Compose on the runner, then the 6 [end-to-end tests](e2e/README.md) | `services/`, `e2e/` or `deploy/docker/` changed |
-| `k8s` ([k8s.yml](.github/workflows/k8s.yml)) | a **three-node** kind cluster on the runner, the whole shop installed with [`kind-up.sh` + `shop-up.sh`](deploy/k3s/README.md), every chart's `helm test`, pods only on the workers, Pod Security "restricted" clean | `deploy/helm/`, `deploy/k3s/` or `deploy/k8s/` changed |
+| `k8s` ([k8s.yml](.github/workflows/k8s.yml)) | a **three-node** kind cluster on the runner, the whole shop installed with [`kind-up.sh` + `shop-up.sh`](deploy/k3s/README.md), every chart's `helm test`, an order through the front door, the network rules, killed pods coming back, the HPAs under Locust load, pods only on the workers, Pod Security "restricted" clean | `deploy/helm/`, `deploy/k3s/`, `deploy/k8s/` or `loadgen/` changed |
 
 On `main`, the job `publish` builds and scans the same way and then pushes the images to GHCR (public):
 `ghcr.io/harith935/opspilot-<service>:sha-<short commit>` ([details](services/README.md#container-images)).

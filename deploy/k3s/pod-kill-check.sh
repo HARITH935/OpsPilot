@@ -89,9 +89,11 @@ order_once() {
 # orders_work_again <kill time> <round>: an order every few seconds until one is CONFIRMED, 5 min after the kill at
 # most. The time it took is the honest recovery number: the pods being Ready isn't the end, the services also have to
 # reconnect (to PostgreSQL, Kafka, Redis) and Kafka has to hand out the partitions to the new consumers again.
+# Always at least one attempt: if waiting for the pods already used up the 5 min (a part that never came back), the
+# FAIL should still say what an order did, not just that there was no time left (found by the throwaway PR #56).
 orders_work_again() {
   local since=$1 attempt=0 result
-  while (( $(date +%s) - since < 300 )); do
+  while true; do
     attempt=$((attempt + 1))
     result=$(order_once)
     if [ "$result" = CONFIRMED ]; then
@@ -99,6 +101,7 @@ orders_work_again() {
       return
     fi
     echo "      attempt $attempt: $result"
+    (( $(date +%s) - since < 300 )) || break
     sleep 5
   done
   bad "$2: no order CONFIRMED within 5 min of the kill"
