@@ -16,8 +16,9 @@ specific allows for each piece of the shop live.
    installed, so nothing in the shop is ever briefly open by accident.
 2. **The allows** for each piece live next to what they protect, as part of that component's own Helm chart:
    - `deploy/helm/opspilot/templates/network-policies.yaml` — Traefik → `api-gateway`, `api-gateway` → the three
-     services, each service → the exact Kafka / Postgres / Redis ports it needs, DNS egress, and the `opspilot-obs`
-     metrics scrape (Part B6).
+     services, each service → the exact Kafka / Postgres / Redis ports it needs, and DNS egress.
+     (This originally also claimed an `opspilot-obs` metrics-scrape allow. There was none: that namespace did not
+     exist yet in step 4.6b. The rule is added with Prometheus in step 6.1, which is also when it can be proven.)
    - `deploy/helm/postgres/templates/network-policy.yaml`, `deploy/helm/redis/templates/network-policy.yaml` — who
      may connect to that chart's pods, read from `values.yaml` (`networkPolicy.allowedApps`), so a chart stays
      self-contained and its README documents its own rules.

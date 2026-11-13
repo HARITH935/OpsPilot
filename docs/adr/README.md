@@ -19,3 +19,4 @@ Each records the context, the decision, the alternatives considered and the cons
 | [0012](0012-one-generic-service-chart.md) | The four services from one generic Helm chart, bundled by the umbrella chart opspilot | 2026-11-11 |
 | [0013](0013-traefik-and-gateway-api.md) | The front door: Traefik and the Gateway API instead of Ingress-NGINX | 2026-11-12 |
 | [0014](0014-network-policies.md) | NetworkPolicies: default-deny per namespace, allows live next to what they protect | 2026-11-12 |
+| [0015](0015-observability-before-go-live.md) | Phase 6 (observability) is built before Phase 5 (go live) | 2026-11-13 |
