@@ -94,6 +94,9 @@ jobs:
       # Killed pods come back (step 4.7b): every pod of the four services at once, then PostgreSQL + Kafka + Redis at
       # once; each time until new pods are Ready and an order is CONFIRMED again. Before the HPA step, so each service
       # is still at about 1 pod (not 3 JVMs per service restarting at once).
+      # THROWAWAY (proves the check can fail; never merged): payment-service has no pods, so nothing can come back
+      - name: Mutation - payment-service scaled to 0
+        run: kubectl scale deployment/payment-service -n opspilot-apps --replicas=0
       - name: Killed pods come back
         run: deploy/k3s/pod-kill-check.sh http://localhost
       # The HPAs under real load (step 4.7a): at least one service scales up, the load test itself passes (only
