@@ -4,6 +4,7 @@
 # order to a final state (no order left PENDING, none timed out) once the load stops.
 # Needs the whole shop running (deploy/k3s/shop-up.sh) and uv (loadgen/); runs in CI (k8s workflow), or locally:
 #   deploy/k3s/hpa-check.sh
+# Needs bash 4 or newer (associative arrays): CI's Ubuntu has it; macOS's own /bin/bash is 3.2 (brew install bash).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 failed=0

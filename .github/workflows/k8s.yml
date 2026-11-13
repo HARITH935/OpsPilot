@@ -1,7 +1,7 @@
 # The full-size Kubernetes check (step 4.5, ADR 0009): a three-node kind cluster on the runner, the whole shop
 # installed with the same scripts as on the laptop (kind-up.sh, shop-up.sh), then every chart's helm test and an
-# order from outside through the front door (front-door-check.sh), the network rules (network-policy-check.sh) and
-# the HPAs under real load (hpa-check.sh, step 4.7a). Runs on every pull request to main and every push to main that
+# order from outside through the front door (front-door-check.sh), the network rules (network-policy-check.sh),
+# killed pods coming back (pod-kill-check.sh, step 4.7b) and the HPAs under real load (hpa-check.sh, step 4.7a). Runs on every pull request to main and every push to main that
 # can change what it installs (deploy/helm, deploy/k3s, deploy/k8s, loadgen, this file, the tools script). A PR can
 # only be merged when this passes (required check "k8s").
 # The images are the ones named in deploy/helm/opspilot/values.yaml, exactly what would be deployed; changes to the
@@ -91,6 +91,11 @@ jobs:
       # The network rules (step 4.6b): intruder pods reach nothing of ours, each service only what it needs
       - name: Only the allowed connections
         run: deploy/k3s/network-policy-check.sh
+      # Killed pods come back (step 4.7b): every pod of the four services at once, then PostgreSQL + Kafka + Redis at
+      # once; each time until new pods are Ready and an order is CONFIRMED again. Before the HPA step, so each service
+      # is still at about 1 pod (not 3 JVMs per service restarting at once).
+      - name: Killed pods come back
+        run: deploy/k3s/pod-kill-check.sh http://localhost
       # The HPAs under real load (step 4.7a): at least one service scales up, the load test itself passes (only
       # correct 429s), and every order still reaches a final state once the load stops. ~4-5 minutes.
       - name: Autoscaling under load
